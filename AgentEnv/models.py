@@ -15,7 +15,306 @@ from enum import Enum
 from typing import Literal
 
 from openenv.core.env_server.types import Action, Observation
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator
+
+
+class DocumentType(str, Enum):
+    """Enumeration of all document types in the SkyPlan system.
+
+    Each document type represents a specific planning artifact:
+    - RESEARCH: Market research and competitive analysis
+    - PRD: Product Requirements Document
+    - TRD: Technical Requirements Document
+    - ARCHITECTURE: System architecture and design
+    - ROADMAP: Product roadmap and milestones
+    - TASKS: Task breakdown and sprint planning
+    - VALIDATION: Validation report and quality assessment
+    - STRATEGY: Strategic direction and approval
+    """
+
+    RESEARCH = "RESEARCH"
+    PRD = "PRD"
+    TRD = "TRD"
+    ARCHITECTURE = "ARCHITECTURE"
+    ROADMAP = "ROADMAP"
+    TASKS = "TASKS"
+    VALIDATION = "VALIDATION"
+    STRATEGY = "STRATEGY"
+
+    @classmethod
+    def get_display_name(cls, doc_type: str) -> str:
+        """Get human-readable display name for a document type."""
+        names = {
+            cls.RESEARCH.value: "Research Summary",
+            cls.PRD.value: "Product Requirements Document",
+            cls.TRD.value: "Technical Requirements Document",
+            cls.ARCHITECTURE.value: "System Architecture",
+            cls.ROADMAP.value: "Product Roadmap",
+            cls.TASKS.value: "Task Breakdown",
+            cls.VALIDATION.value: "Validation Report",
+            cls.STRATEGY.value: "Strategic Direction",
+        }
+        return names.get(doc_type, doc_type)
+
+    @classmethod
+    def get_filename(cls, doc_type: str) -> str:
+        """Get the filename for a document type."""
+        filenames = {
+            cls.RESEARCH.value: "RESEARCH.md",
+            cls.PRD.value: "PRD.md",
+            cls.TRD.value: "TRD.md",
+            cls.ARCHITECTURE.value: "ARCHITECTURE.md",
+            cls.ROADMAP.value: "ROADMAP.md",
+            cls.TASKS.value: "TASKS.md",
+            cls.VALIDATION.value: "VALIDATION.md",
+            cls.STRATEGY.value: "STRATEGY.md",
+        }
+        return filenames.get(doc_type, f"{doc_type}.md")
+
+
+class Document(BaseModel):
+    """Represents a planning document in the SkyPlan system.
+
+    Each document contains:
+    - type: The type of document (e.g., PRD, TRD)
+    - content: The actual document content
+    - author: The agent who created/last modified the document
+    - created_at: Timestamp when the document was created
+    - updated_at: Timestamp when the document was last updated
+    - status: Current status of the document (draft, in_review, approved, rejected)
+    """
+
+    type: str = Field(..., description="The type of document (e.g., PRD, TRD)")
+    content: str = Field(default="", description="The actual document content")
+    author: str = Field(..., description="The agent who created/last modified the document")
+    created_at: str = Field(default="", description="Timestamp when the document was created")
+    updated_at: str = Field(default="", description="Timestamp when the document was last updated")
+    status: Literal["draft", "in_review", "approved", "rejected"] = Field(
+        default="draft",
+        description="Current status of the document",
+    )
+
+
+class FeedbackType(str, Enum):
+    """Enumeration of feedback types in the SkyPlan system.
+
+    Each feedback type represents a different kind of peer review:
+    - SUGGESTION: Ideas for improvement
+    - CRITIQUE: Critical feedback on issues
+    - QUESTION: Clarification requests
+    - APPROVAL: Positive feedback or approval
+    - CONCERN: Risk or issue identification
+    - REQUEST_REVISION: Request for changes
+    """
+
+    SUGGESTION = "suggestion"
+    CRITIQUE = "critique"
+    QUESTION = "question"
+    APPROVAL = "approval"
+    CONCERN = "concern"
+    REQUEST_REVISION = "request_revision"
+
+    @classmethod
+    def get_display_name(cls, feedback_type: str) -> str:
+        """Get human-readable display name for a feedback type."""
+        names = {
+            cls.SUGGESTION.value: "Suggestion",
+            cls.CRITIQUE.value: "Critique",
+            cls.QUESTION.value: "Question",
+            cls.APPROVAL.value: "Approval",
+            cls.CONCERN.value: "Concern",
+            cls.REQUEST_REVISION.value: "Request for Revision",
+        }
+        return names.get(feedback_type, feedback_type)
+
+
+class ActionResult(str, Enum):
+    """Enumeration of action result statuses in the SkyPlan system.
+
+    Each result status represents the outcome of a previous action:
+    - SUCCESS: The action completed successfully
+    - FAILURE: The action failed due to an error or issue
+    - PARTIAL: The action completed but with some issues or incomplete work
+    - REJECTED: The action was rejected (e.g., document validation failed)
+    - PENDING: The action is still being processed
+    """
+
+    SUCCESS = "success"
+    FAILURE = "failure"
+    PARTIAL = "partial"
+    REJECTED = "rejected"
+    PENDING = "pending"
+
+    @classmethod
+    def get_display_name(cls, result: str) -> str:
+        """Get human-readable display name for an action result."""
+        names = {
+            cls.SUCCESS.value: "Success",
+            cls.FAILURE.value: "Failure",
+            cls.PARTIAL.value: "Partial",
+            cls.REJECTED.value: "Rejected",
+            cls.PENDING.value: "Pending",
+        }
+        return names.get(result, result)
+
+    @classmethod
+    def is_successful(cls, result: str) -> bool:
+        """Check if the result indicates a successful outcome."""
+        return result in [cls.SUCCESS.value, cls.PARTIAL.value]
+
+    @classmethod
+    def is_failure(cls, result: str) -> bool:
+        """Check if the result indicates a failed outcome."""
+        return result in [cls.FAILURE.value, cls.REJECTED.value]
+
+
+class Feedback(BaseModel):
+    """Represents peer review feedback in the SkyPlan system.
+
+    Each feedback entry contains:
+    - from_agent: Who gave the feedback
+    - to_agent: Who the feedback is for (optional, can be general)
+    - document_type: Which document this feedback is about (optional)
+    - feedback_type: The type of feedback (suggestion, critique, etc.)
+    - comment: The actual feedback text
+    - timestamp: When the feedback was given
+    - resolved: Whether the feedback has been addressed
+    """
+
+    from_agent: str = Field(..., description="The agent who provided this feedback")
+    to_agent: str = Field(
+        default="",
+        description="The agent this feedback is for (empty if general)",
+    )
+    document_type: str = Field(
+        default="",
+        description="The document type this feedback is about (empty if general)",
+    )
+    feedback_type: Literal["suggestion", "critique", "question", "approval", "concern", "request_revision"] = Field(
+        default="suggestion",
+        description="The type of feedback",
+    )
+    comment: str = Field(..., description="The actual feedback text or critique")
+    timestamp: str = Field(default="", description="Timestamp when the feedback was given")
+    resolved: bool = Field(
+        default=False,
+        description="Whether this feedback has been addressed/resolved",
+    )
+
+    @classmethod
+    def create(
+        cls,
+        from_agent: str,
+        comment: str,
+        feedback_type: str = "suggestion",
+        to_agent: str = "",
+        document_type: str = "",
+    ) -> "Feedback":
+        """Factory method to create a feedback entry with auto-generated timestamp.
+
+        Args:
+            from_agent: The agent providing the feedback
+            comment: The feedback text
+            feedback_type: Type of feedback (suggestion, critique, etc.)
+            to_agent: Target agent (optional)
+            document_type: Related document (optional)
+
+        Returns:
+            A new Feedback instance
+        """
+        from datetime import datetime
+
+        return cls(
+            from_agent=from_agent,
+            to_agent=to_agent,
+            document_type=document_type,
+            feedback_type=feedback_type,
+            comment=comment,
+            timestamp=datetime.utcnow().isoformat() + "Z",
+            resolved=False,
+        )
+
+    def get_summary(self) -> str:
+        """Get a human-readable summary of this feedback."""
+        from_name = AgentId.get_display_name(self.from_agent)
+        type_name = FeedbackType.get_display_name(self.feedback_type)
+
+        parts = [f"[{type_name}] {from_name}:"]
+        if self.document_type:
+            parts.append(f"({self.document_type})")
+        parts.append(self.comment)
+        return " ".join(parts)
+
+
+class LastAction(BaseModel):
+    """Represents the result of the previous action in the SkyPlan system.
+
+    This model provides information about the last action taken, allowing
+    the current agent to determine if the previous work was successful
+    or if it needs to be revisited.
+
+    Contains:
+    - agent_id: Who took the last action
+    - action_type: What action was taken
+    - result: The outcome status (success, failure, partial, rejected, pending)
+    - message: A descriptive message about the result
+    - timestamp: When the action was completed
+    """
+
+    agent_id: str = Field(..., description="The agent who took the last action")
+    action_type: str = Field(..., description="The type of action that was taken")
+    result: Literal["success", "failure", "partial", "rejected", "pending"] = Field(
+        default="pending",
+        description="The outcome status of the last action",
+    )
+    message: str = Field(
+        default="",
+        description="A descriptive message about the result (e.g., 'PRD created successfully' or 'Document rejected due to missing sections')",
+    )
+    timestamp: str = Field(default="", description="Timestamp when the action was completed")
+
+    @classmethod
+    def create(
+        cls,
+        agent_id: str,
+        action_type: str,
+        result: str,
+        message: str = "",
+    ) -> "LastAction":
+        """Factory method to create a LastAction entry with auto-generated timestamp.
+
+        Args:
+            agent_id: The agent who took the action
+            action_type: The type of action taken
+            result: The outcome status
+            message: Descriptive message about the result
+
+        Returns:
+            A new LastAction instance
+        """
+        from datetime import datetime
+
+        return cls(
+            agent_id=agent_id,
+            action_type=action_type,
+            result=result,
+            message=message,
+            timestamp=datetime.utcnow().isoformat() + "Z",
+        )
+
+    def is_successful(self) -> bool:
+        """Check if the last action was successful."""
+        return ActionResult.is_successful(self.result)
+
+    def is_failure(self) -> bool:
+        """Check if the last action failed."""
+        return ActionResult.is_failure(self.result)
+
+    def get_summary(self) -> str:
+        """Get a human-readable summary of the last action."""
+        agent_name = AgentId.get_display_name(self.agent_id)
+        result_name = ActionResult.get_display_name(self.result)
+        return f"{agent_name} performed {self.action_type}: {result_name} - {self.message}"
 
 
 class AgentId(str, Enum):
@@ -28,6 +327,8 @@ class AgentId(str, Enum):
     - ROBERT: Execution Planner - creates roadmaps and sprint backlogs
     - TAYLOR: Validator - validates all planning artifacts for quality and completeness
     - SAM: CEO - provides final strategic approval and direction
+
+    Workflow Order: Maya → Elon → Jordan → Robert → Taylor → Sam
     """
 
     MAYA = "maya"
@@ -36,6 +337,9 @@ class AgentId(str, Enum):
     ROBERT = "robert"
     TAYLOR = "taylor"
     SAM = "sam"
+
+    # Define the workflow order for agent progression
+    WORKFLOW_ORDER = [MAYA, ELON, JORDAN, ROBERT, TAYLOR, SAM]
 
     @classmethod
     def get_display_name(cls, agent_id: str) -> str:
@@ -49,6 +353,38 @@ class AgentId(str, Enum):
             cls.SAM.value: "Sam (CEO)",
         }
         return names.get(agent_id, agent_id)
+
+    @classmethod
+    def get_next_agent(cls, current_agent: str) -> str:
+        """Get the next agent in the workflow order.
+
+        Args:
+            current_agent: The current agent ID
+
+        Returns:
+            The next agent ID in the workflow, or the first agent if at the end
+        """
+        try:
+            current_index = cls.WORKFLOW_ORDER.index(cls(current_agent))
+            next_index = (current_index + 1) % len(cls.WORKFLOW_ORDER)
+            return cls.WORKFLOW_ORDER[next_index].value
+        except (ValueError, AttributeError):
+            return cls.MAYA.value
+
+    @classmethod
+    def get_workflow_position(cls, agent_id: str) -> int:
+        """Get the position of an agent in the workflow (0-indexed).
+
+        Args:
+            agent_id: The agent ID
+
+        Returns:
+            The position in the workflow, or -1 if not found
+        """
+        try:
+            return cls.WORKFLOW_ORDER.index(cls(agent_id))
+        except (ValueError, AttributeError):
+            return -1
 
 
 class ActionType(str, Enum):
@@ -252,16 +588,50 @@ class AgentenvObservation(Observation):
     """Observation from the Agentenv environment.
 
     Provides feedback to agents about:
+    - The task description (the work order/goal)
     - The result of their action
     - The system's reasoning for the result (why it succeeded/failed)
+    - Who's next to take action (current_agent)
+    - Progress tracking (step_number)
+    - Documents: The shared folder containing all work produced so far
+    - Feedback: Peer reviews and critiques from previous agents
+    - Last action result: Success/failure check for the previous action
     - Current state of the planning documents
     - Any errors or validation issues
     """
 
+    task_description: str = Field(
+        default="",
+        description="The work order/goal that the team is trying to achieve. A simple reminder of the specific objective for the current task.",
+    )
     result: str = Field(default="", description="Result message from the action")
     reasoning: str = Field(
         default="",
         description="The system's reasoning explaining why this result was produced. Helps agents understand the decision-making process.",
+    )
+    current_agent: Literal["maya", "elon", "jordan", "robert", "taylor", "sam"] = Field(
+        default="maya",
+        description="The agent whose turn it is to take the next action. Like a scoreboard showing who is 'holding the pen'.",
+    )
+    step_number: int = Field(
+        default=1,
+        description="The current step number in the overall project workflow. Tracks progress (e.g., 'Step 4 of 10').",
+    )
+    total_steps: int = Field(
+        default=10,
+        description="The total number of steps in the current project workflow. Used with step_number to show progress.",
+    )
+    documents: dict[str, Document] = Field(
+        default_factory=dict,
+        description="The shared folder containing all work produced by agents so far. Maps document types to Document objects (e.g., 'PRD' → Document with PRD content).",
+    )
+    feedback: list[Feedback] = Field(
+        default_factory=list,
+        description="Peer reviews and critiques from previous agents. Lists any comments or critiques (e.g., 'The architecture is too complex').",
+    )
+    last_action_result: LastAction | None = Field(
+        default=None,
+        description="Success/failure check for the previous action. Tells the agent if the person who just went before them succeeded or if something went wrong (like a system error or a rejected document).",
     )
     current_state: dict = Field(
         default_factory=dict,
@@ -272,3 +642,63 @@ class AgentenvObservation(Observation):
         description="List of any errors encountered during action execution",
     )
     step_count: int = Field(default=0, description="Current step number in the episode")
+
+    def get_feedback_for_agent(self, agent_id: str) -> list[Feedback]:
+        """Get all feedback addressed to a specific agent.
+
+        Args:
+            agent_id: The agent ID to filter feedback for
+
+        Returns:
+            List of feedback entries for the specified agent
+        """
+        return [f for f in self.feedback if f.to_agent == agent_id or f.to_agent == ""]
+
+    def get_feedback_for_document(self, document_type: str) -> list[Feedback]:
+        """Get all feedback related to a specific document.
+
+        Args:
+            document_type: The document type to filter feedback for
+
+        Returns:
+            List of feedback entries for the specified document
+        """
+        return [f for f in self.feedback if f.document_type == document_type]
+
+    def get_unresolved_feedback(self) -> list[Feedback]:
+        """Get all unresolved feedback.
+
+        Returns:
+            List of unresolved feedback entries
+        """
+        return [f for f in self.feedback if not f.resolved]
+
+    def was_previous_action_successful(self) -> bool:
+        """Check if the previous action was successful.
+
+        Returns:
+            True if the previous action succeeded, False otherwise or if no previous action exists
+        """
+        if self.last_action_result is None:
+            return False
+        return self.last_action_result.is_successful()
+
+    def did_previous_action_fail(self) -> bool:
+        """Check if the previous action failed.
+
+        Returns:
+            True if the previous action failed, False otherwise or if no previous action exists
+        """
+        if self.last_action_result is None:
+            return False
+        return self.last_action_result.is_failure()
+
+    def get_previous_action_summary(self) -> str:
+        """Get a summary of the previous action.
+
+        Returns:
+            Human-readable summary of the previous action, or empty string if no previous action exists
+        """
+        if self.last_action_result is None:
+            return ""
+        return self.last_action_result.get_summary()
