@@ -169,6 +169,53 @@ class MyAction(Action):
     field_name: str = Field(..., description="Description")
 ```
 
+## Reference Repository: OpenOfficeRL
+
+**Repository**: https://github.com/bvsbharat/OpenOfficeRL
+
+This is a similar multi-agent OpenEnv project that can be used as a reference for implementing SkyPlan.
+
+### Key Patterns to Adapt
+
+**Multi-Agent System:**
+- 7 agents with role-specific actions (CEO, Dev, Marketing, Sales, Content, HR, Customer)
+- Asymmetric observations - each agent sees different data based on their role
+- LLM-powered agents with role-specific system prompts
+
+**Environment Structure:**
+- 90 simulated days, 4 phases per day (morning_standup, execution, review, planning)
+- Event engine for scenario-specific events
+- 5 scenarios: Baseline GTM Launch, Competitor Launch, Series A Pressure, Churn Spike, Viral Moment
+
+**Reward Function (6 components):**
+- Pipeline stage rewards, KPI delta rewards, action rewards
+- Collaboration bonuses, constraint penalties, base shaping
+
+**Training Pipeline:**
+- TRL + Unsloth with GRPO + LoRA
+- Base model: Qwen 2.5 14B
+- Trajectory collector for capturing agent turns
+
+### Reference Files
+
+| File | Purpose |
+|------|---------|
+| `office_os_environment.py` | Core env with reset/step/state |
+| `models.py` | Action/Observation dataclasses |
+| `market/config.py` | Agent roles, actions, pipeline stages |
+| `market/simulator.py` | Action execution logic |
+| `market/metrics.py` | Reward calculation |
+| `agents/llm_agent.py` | LLM-powered agent implementation |
+| `agents/prompts.py` | Role-specific system prompts |
+
+### For SkyPlan Adaptation
+
+Replace the office simulation with:
+- **6 Planning Agents**: Maya (Research), Elon (PM), Jordan (Architect), Robert (Execution), Taylor (Validator), Sam (CEO)
+- **Planning Pipeline**: Research → PRD → TRD → Roadmap → Tasks → Validation
+- **3 Tasks with Graders**: Easy (simple feature), Medium (complex feature), Hard (multi-product)
+- **Reward Function**: Document quality scores, collaboration bonuses, constraint penalties
+
 ## Important Notes
 
 - The current `AgentEnv` is a template/echo environment - needs to be replaced with the actual SkyPlan multi-agent planning environment
