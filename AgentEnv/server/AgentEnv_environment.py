@@ -19,23 +19,31 @@ from openenv.core.env_server.types import State
 
 try:
     from ..models import (
+        ACTION_TO_DOCUMENT,
         AgentId,
         Document,
         DocumentType,
         Feedback,
         LastAction,
+        RewardConfig,
         SkyPlanAction,
         SkyPlanObservation,
+        ValidationConfig,
+        WorkflowConfig,
     )
 except ImportError:
     from models import (
+        ACTION_TO_DOCUMENT,
         AgentId,
         Document,
         DocumentType,
         Feedback,
         LastAction,
+        RewardConfig,
         SkyPlanAction,
         SkyPlanObservation,
+        ValidationConfig,
+        WorkflowConfig,
     )
 
 
@@ -59,12 +67,16 @@ class SkyPlanEnvironment(Environment):
     # projects to run simultaneously.
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
 
-    def __init__(self):
-        """Initialize the SkyPlan environment with isolated state."""
+    def __init__(self, total_steps: int = WorkflowConfig.DEFAULT_TOTAL_STEPS):
+        """Initialize the SkyPlan environment with isolated state.
+
+        Args:
+            total_steps: Total number of steps for the planning workflow
+        """
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._current_agent = AgentId.MAYA.value
         self._step_number = 1
-        self._total_steps = 10
+        self._total_steps = total_steps
         self._documents: dict[str, Document] = {}
         self._feedback: list[Feedback] = []
         self._last_action_result: LastAction | None = None
@@ -81,28 +93,16 @@ class SkyPlanEnvironment(Environment):
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._current_agent = AgentId.MAYA.value
         self._step_number = 1
-        self._total_steps = 10
         self._documents = {}
         self._feedback = []
         self._last_action_result = None
         self._task_description = "Create a comprehensive planning document for the given idea."
         self._done = False
 
-        return SkyPlanObservation(
-            task_description=self._task_description,
+        return self._build_observation(
             result="Environment reset. Ready to begin planning.",
             reasoning="Starting new planning episode with Maya (Research Analyst).",
-            current_agent=self._current_agent,
-            step_number=self._step_number,
-            total_steps=self._total_steps,
-            documents=self._documents,
-            feedback=self._feedback,
-            last_action_result=self._last_action_result,
-            current_state={"status": "ready", "phase": "research"},
-            errors=[],
-            step_count=self._state.step_count,
-            done=False,
-            reward=0.0,
+            status="ready",
         )
 
     def step(self, action: SkyPlanAction) -> SkyPlanObservation:  # type: ignore[override]
@@ -124,7 +124,7 @@ class SkyPlanEnvironment(Environment):
         self._state.step_count += 1
 
         # 1. The Inspection: Validate action matches current agent
-        if action.agent_id != self._current_agent:
+        if not self._is_valid_agent(action):
             return self._create_error_observation(
                 f"Expected agent {self._current_agent}, got {action.agent_id}"
             )
@@ -163,20 +163,10 @@ class SkyPlanEnvironment(Environment):
             message=f"{action.action_type} completed successfully",
         )
 
-        return SkyPlanObservation(
-            task_description=self._task_description,
+        return self._build_observation(
             result=f"{action.action_type} completed successfully",
             reasoning=f"Action processed by {action.agent_id}. Moving to {next_agent}.",
-            current_agent=self._current_agent,
-            step_number=self._step_number,
-            total_steps=self._total_steps,
-            documents=self._documents,
-            feedback=self._feedback,
-            last_action_result=self._last_action_result,
-            current_state={"status": "in_progress", "phase": self._get_current_phase()},
-            errors=[],
-            step_count=self._state.step_count,
-            done=self._done,
+            status="in_progress",
             reward=reward,
         )
 
@@ -190,6 +180,21 @@ class SkyPlanEnvironment(Environment):
         """
         return self._state
 
+    # ==========================================================================
+    # Private Methods - Internal Implementation
+    # ==========================================================================
+
+    def _is_valid_agent(self, action: SkyPlanAction) -> bool:
+        """Check if the action is from the expected agent.
+
+        Args:
+            action: The action to validate
+
+        Returns:
+            True if agent matches current_agent, False otherwise
+        """
+        return action.agent_id == self._current_agent
+
     def _validate_action(self, action: SkyPlanAction) -> dict:
         """
         The Inspection: Validate if the agent turned in valid work.
@@ -200,15 +205,15 @@ class SkyPlanEnvironment(Environment):
         Returns:
             Dict with 'is_valid' (bool) and 'error' (str if invalid)
         """
-        # Check if content is empty
-        if not action.content or len(action.content.strip()) < 10:
+        # Check if content meets minimum length
+        if not action.content or len(action.content.strip()) < ValidationConfig.MIN_CONTENT_LENGTH:
             return {
                 "is_valid": False,
                 "error": f"Content too short or empty for action {action.action_type}",
             }
 
-        # Check if reasoning is provided
-        if not action.reasoning or len(action.reasoning.strip()) < 5:
+        # Check if reasoning meets minimum length
+        if not action.reasoning or len(action.reasoning.strip()) < ValidationConfig.MIN_REASONING_LENGTH:
             return {
                 "is_valid": False,
                 "error": "Reasoning too short or empty",
@@ -225,45 +230,10 @@ class SkyPlanEnvironment(Environment):
         Args:
             action: The action containing the document content
         """
-        # Map action types to document types
-        action_to_doc = {
-            "SEARCH_MARKET": DocumentType.RESEARCH.value,
-            "ANALYZE_COMPETITORS": DocumentType.RESEARCH.value,
-            "VALIDATE_PROBLEM": DocumentType.RESEARCH.value,
-            "SUMMARIZE_INSIGHTS": DocumentType.RESEARCH.value,
-            "IDENTIFY_OPPORTUNITIES": DocumentType.RESEARCH.value,
-            "WRITE_PRD": DocumentType.PRD.value,
-            "DEFINE_FEATURES": DocumentType.PRD.value,
-            "IDENTIFY_USER_PERSONA": DocumentType.PRD.value,
-            "PRIORITIZE_FEATURES": DocumentType.PRD.value,
-            "DEFINE_SUCCESS_METRICS": DocumentType.PRD.value,
-            "DESIGN_ARCHITECTURE": DocumentType.ARCHITECTURE.value,
-            "SELECT_TECH_STACK": DocumentType.TRD.value,
-            "DEFINE_APIS": DocumentType.TRD.value,
-            "DESIGN_DATA_MODEL": DocumentType.TRD.value,
-            "WRITE_TRD": DocumentType.TRD.value,
-            "CREATE_ROADMAP": DocumentType.ROADMAP.value,
-            "BREAK_INTO_TASKS": DocumentType.TASKS.value,
-            "PLAN_SPRINTS": DocumentType.TASKS.value,
-            "ESTIMATE_TIMELINES": DocumentType.ROADMAP.value,
-            "DEFINE_DEPENDENCIES": DocumentType.TASKS.value,
-            "REVIEW_DOCUMENTS": DocumentType.VALIDATION.value,
-            "CHECK_CONSISTENCY": DocumentType.VALIDATION.value,
-            "VALIDATE_CLAIMS": DocumentType.VALIDATION.value,
-            "IDENTIFY_RISKS": DocumentType.VALIDATION.value,
-            "SCORE_PLAN": DocumentType.VALIDATION.value,
-            "SET_DIRECTION": DocumentType.STRATEGY.value,
-            "REVIEW_PLAN": DocumentType.STRATEGY.value,
-            "APPROVE_STRATEGY": DocumentType.STRATEGY.value,
-            "PRIORITIZE_OBJECTIVES": DocumentType.STRATEGY.value,
-            "REQUEST_REVISION": DocumentType.STRATEGY.value,
-        }
-
-        doc_type = action_to_doc.get(action.action_type)
+        doc_type = ACTION_TO_DOCUMENT.get(action.action_type)
         if not doc_type:
             return  # Action doesn't produce a document
 
-        # Create or update document
         timestamp = datetime.utcnow().isoformat() + "Z"
 
         if doc_type in self._documents:
@@ -293,35 +263,106 @@ class SkyPlanEnvironment(Environment):
             Reward in range 0.0 to 1.0
         """
         # Base reward for completing action
-        reward = 0.1
+        reward = RewardConfig.BASE_REWARD
 
-        # Content length bonus (up to 0.3)
+        # Content length bonus
         content_length = len(action.content)
-        length_bonus = min(content_length / 1000.0, 0.3)
+        length_bonus = min(
+            content_length / RewardConfig.CONTENT_LENGTH_TARGET,
+            RewardConfig.CONTENT_LENGTH_WEIGHT,
+        )
         reward += length_bonus
 
-        # Reasoning quality bonus (up to 0.2)
+        # Reasoning quality bonus
         reasoning_length = len(action.reasoning)
-        reasoning_bonus = min(reasoning_length / 200.0, 0.2)
+        reasoning_bonus = min(
+            reasoning_length / RewardConfig.REASONING_TARGET,
+            RewardConfig.REASONING_WEIGHT,
+        )
         reward += reasoning_bonus
 
-        # Document structure bonus (up to 0.4)
-        structure_bonus = 0.0
-        if "##" in action.content:  # Has headers
-            structure_bonus += 0.1
-        if "-" in action.content or "*" in action.content:  # Has lists
-            structure_bonus += 0.1
-        if action.content.count("\n") > 5:  # Has multiple paragraphs
-            structure_bonus += 0.1
-        if any(keyword in action.content.lower() for keyword in ["overview", "summary", "goal", "objective"]):
-            structure_bonus += 0.1
+        # Document structure bonus
+        structure_bonus = self._calculate_structure_bonus(action.content)
         reward += structure_bonus
 
-        # Cap at 1.0
-        return min(reward, 1.0)
+        # Cap at maximum reward
+        return min(reward, RewardConfig.MAX_REWARD)
+
+    def _calculate_structure_bonus(self, content: str) -> float:
+        """Calculate structure bonus based on document content.
+
+        Args:
+            content: The document content to analyze
+
+        Returns:
+            Structure bonus in range 0.0 to STRUCTURE_WEIGHT
+        """
+        bonus = 0.0
+        weight_per_element = RewardConfig.STRUCTURE_WEIGHT / 4
+
+        # Has headers
+        if "##" in content:
+            bonus += weight_per_element
+
+        # Has lists
+        if "-" in content or "*" in content:
+            bonus += weight_per_element
+
+        # Has multiple paragraphs
+        if content.count("\n") > 5:
+            bonus += weight_per_element
+
+        # Has key structural keywords
+        keywords = ["overview", "summary", "goal", "objective"]
+        if any(keyword in content.lower() for keyword in keywords):
+            bonus += weight_per_element
+
+        return bonus
+
+    def _build_observation(
+        self,
+        result: str,
+        reasoning: str,
+        status: str,
+        reward: float = 0.0,
+    ) -> SkyPlanObservation:
+        """Build a SkyPlanObservation with current state.
+
+        Args:
+            result: Result message
+            reasoning: System reasoning
+            status: Current status
+            reward: Reward value
+
+        Returns:
+            Complete SkyPlanObservation
+        """
+        return SkyPlanObservation(
+            task_description=self._task_description,
+            result=result,
+            reasoning=reasoning,
+            current_agent=self._current_agent,
+            step_number=self._step_number,
+            total_steps=self._total_steps,
+            documents=self._documents,
+            feedback=self._feedback,
+            last_action_result=self._last_action_result,
+            current_state={"status": status, "phase": self._get_current_phase()},
+            errors=[],
+            step_count=self._state.step_count,
+            done=self._done,
+            reward=reward,
+        )
 
     def _create_error_observation(self, error_message: str) -> SkyPlanObservation:
-        """Create an observation with an error state."""
+        """Create an observation with an error state.
+
+        Args:
+            error_message: The error message to include
+
+        Returns:
+            SkyPlanObservation with error state
+        """
         return SkyPlanObservation(
             task_description=self._task_description,
             result="Action failed",
@@ -340,7 +381,13 @@ class SkyPlanEnvironment(Environment):
         )
 
     def _get_current_phase(self) -> str:
-        """Get the current planning phase based on step number."""
-        phases = ["research", "product", "architecture", "planning", "validation", "strategy"]
-        phase_index = min((self._step_number - 1) // 2, len(phases) - 1)
-        return phases[phase_index]
+        """Get the current planning phase based on step number.
+
+        Returns:
+            Current phase name
+        """
+        phase_index = min(
+            (self._step_number - 1) // 2,
+            len(WorkflowConfig.PHASES) - 1,
+        )
+        return WorkflowConfig.PHASES[phase_index]

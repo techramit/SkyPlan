@@ -37,15 +37,15 @@ except Exception as e:  # pragma: no cover
 
 try:
     from ..models import SkyPlanAction, SkyPlanObservation
-    from .AgentEnv_environment import AgentenvEnvironment
+    from .AgentEnv_environment import SkyPlanEnvironment
 except ModuleNotFoundError:
     from models import SkyPlanAction, SkyPlanObservation
-    from server.AgentEnv_environment import AgentenvEnvironment
+    from server.AgentEnv_environment import SkyPlanEnvironment
 
 
 # Create the app with web interface and README integration
 app = create_app(
-    AgentenvEnvironment,
+    SkyPlanEnvironment,
     SkyPlanAction,
     SkyPlanObservation,
     env_name="AgentEnv",

@@ -5,9 +5,9 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-Data models for the Agentenv Environment.
+Data models for the SkyPlan Environment.
 
-The AgentEnv environment is a multi-agent planning system where specialized agents
+The SkyPlan environment is a multi-agent planning system where specialized agents
 collaborate to transform an idea into structured planning documents.
 """
 
@@ -17,6 +17,81 @@ from typing import Literal
 from openenv.core.env_server.types import Action, Observation
 from pydantic import BaseModel, Field, field_validator
 
+
+# ============================================================================
+# Configuration Constants
+# ============================================================================
+
+class ValidationConfig:
+    """Configuration for action validation thresholds."""
+    MIN_CONTENT_LENGTH = 10
+    MIN_REASONING_LENGTH = 5
+
+
+class RewardConfig:
+    """Configuration for reward calculation weights."""
+    BASE_REWARD = 0.1
+    CONTENT_LENGTH_WEIGHT = 0.3
+    CONTENT_LENGTH_TARGET = 1000
+    REASONING_WEIGHT = 0.2
+    REASONING_TARGET = 200
+    STRUCTURE_WEIGHT = 0.4
+    MAX_REWARD = 1.0
+
+
+class WorkflowConfig:
+    """Configuration for workflow and phases."""
+    PHASES = ["research", "product", "architecture", "planning", "validation", "strategy"]
+    DEFAULT_TOTAL_STEPS = 10
+
+
+# ============================================================================
+# Action to Document Mapping
+# ============================================================================
+
+ACTION_TO_DOCUMENT: dict[str, str] = {
+    # Maya (Research Analyst) - RESEARCH actions
+    "SEARCH_MARKET": "RESEARCH",
+    "ANALYZE_COMPETITORS": "RESEARCH",
+    "VALIDATE_PROBLEM": "RESEARCH",
+    "SUMMARIZE_INSIGHTS": "RESEARCH",
+    "IDENTIFY_OPPORTUNITIES": "RESEARCH",
+    # Elon (Product Manager) - PRODUCT actions
+    "WRITE_PRD": "PRD",
+    "DEFINE_FEATURES": "PRD",
+    "IDENTIFY_USER_PERSONA": "PRD",
+    "PRIORITIZE_FEATURES": "PRD",
+    "DEFINE_SUCCESS_METRICS": "PRD",
+    # Jordan (Architect) - ARCHITECTURE actions
+    "DESIGN_ARCHITECTURE": "ARCHITECTURE",
+    "SELECT_TECH_STACK": "TRD",
+    "DEFINE_APIS": "TRD",
+    "DESIGN_DATA_MODEL": "TRD",
+    "WRITE_TRD": "TRD",
+    # Robert (Execution Planner) - PLANNING actions
+    "CREATE_ROADMAP": "ROADMAP",
+    "BREAK_INTO_TASKS": "TASKS",
+    "PLAN_SPRINTS": "TASKS",
+    "ESTIMATE_TIMELINES": "ROADMAP",
+    "DEFINE_DEPENDENCIES": "TASKS",
+    # Taylor (Validator) - VALIDATION actions
+    "REVIEW_DOCUMENTS": "VALIDATION",
+    "CHECK_CONSISTENCY": "VALIDATION",
+    "VALIDATE_CLAIMS": "VALIDATION",
+    "IDENTIFY_RISKS": "VALIDATION",
+    "SCORE_PLAN": "VALIDATION",
+    # Sam (CEO) - STRATEGY actions
+    "SET_DIRECTION": "STRATEGY",
+    "REVIEW_PLAN": "STRATEGY",
+    "APPROVE_STRATEGY": "STRATEGY",
+    "PRIORITIZE_OBJECTIVES": "STRATEGY",
+    "REQUEST_REVISION": "STRATEGY",
+}
+
+
+# ============================================================================
+# Document Types
+# ============================================================================
 
 class DocumentType(str, Enum):
     """Enumeration of all document types in the SkyPlan system.
@@ -94,6 +169,10 @@ class Document(BaseModel):
         description="Current status of the document",
     )
 
+
+# ============================================================================
+# Feedback Types
+# ============================================================================
 
 class FeedbackType(str, Enum):
     """Enumeration of feedback types in the SkyPlan system.
@@ -317,6 +396,10 @@ class LastAction(BaseModel):
         return f"{agent_name} performed {self.action_type}: {result_name} - {self.message}"
 
 
+# ============================================================================
+# Agent Definitions
+# ============================================================================
+
 class AgentId(str, Enum):
     """Enumeration of all available agents in the SkyPlan system.
 
@@ -534,6 +617,10 @@ class ActionType(str, Enum):
         return agent_actions.get(agent_id, [])
 
 
+# ============================================================================
+# Action and Observation Models
+# ============================================================================
+
 class SkyPlanAction(Action):
     """Action for the SkyPlan environment.
 
@@ -618,7 +705,7 @@ class SkyPlanObservation(Observation):
         description="The current step number in the overall project workflow. Tracks progress (e.g., 'Step 4 of 10').",
     )
     total_steps: int = Field(
-        default=10,
+        default=WorkflowConfig.DEFAULT_TOTAL_STEPS,
         description="The total number of steps in the current project workflow. Used with step_number to show progress.",
     )
     documents: dict[str, Document] = Field(
