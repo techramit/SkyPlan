@@ -7,10 +7,10 @@
 """Agentenv Environment."""
 
 from .client import AgentenvEnv
-from .models import AgentenvAction, AgentenvObservation
+from .models import SkyPlanAction, SkyPlanObservation
 
 __all__ = [
-    "AgentenvAction",
-    "AgentenvObservation",
+    "SkyPlanAction",
+    "SkyPlanObservation",
     "AgentenvEnv",
 ]

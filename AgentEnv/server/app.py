@@ -36,18 +36,18 @@ except Exception as e:  # pragma: no cover
     ) from e
 
 try:
-    from ..models import AgentenvAction, AgentenvObservation
+    from ..models import SkyPlanAction, SkyPlanObservation
     from .AgentEnv_environment import AgentenvEnvironment
 except ModuleNotFoundError:
-    from models import AgentenvAction, AgentenvObservation
+    from models import SkyPlanAction, SkyPlanObservation
     from server.AgentEnv_environment import AgentenvEnvironment
 
 
 # Create the app with web interface and README integration
 app = create_app(
     AgentenvEnvironment,
-    AgentenvAction,
-    AgentenvObservation,
+    SkyPlanAction,
+    SkyPlanObservation,
     env_name="AgentEnv",
     max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
 )

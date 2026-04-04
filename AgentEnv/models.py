@@ -534,8 +534,8 @@ class ActionType(str, Enum):
         return agent_actions.get(agent_id, [])
 
 
-class AgentenvAction(Action):
-    """Action for the Agentenv environment.
+class SkyPlanAction(Action):
+    """Action for the SkyPlan environment.
 
     Each action must specify:
     - agent_id: Who is taking the action (required)
@@ -584,8 +584,8 @@ class AgentenvAction(Action):
         return v
 
 
-class AgentenvObservation(Observation):
-    """Observation from the Agentenv environment.
+class SkyPlanObservation(Observation):
+    """Observation from the SkyPlan environment.
 
     Provides feedback to agents about:
     - The task description (the work order/goal)

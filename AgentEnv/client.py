@@ -12,11 +12,11 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import AgentenvAction, AgentenvObservation
+from .models import SkyPlanAction, SkyPlanObservation
 
 
 class AgentenvEnv(
-    EnvClient[AgentenvAction, AgentenvObservation, State]
+    EnvClient[SkyPlanAction, SkyPlanObservation, State]
 ):
     """
     Client for the Agentenv Environment.
@@ -31,7 +31,7 @@ class AgentenvEnv(
         ...     result = client.reset()
         ...     print(result.observation.echoed_message)
         ...
-        ...     result = client.step(AgentenvAction(message="Hello!"))
+        ...     result = client.step(SkyPlanAction(message="Hello!"))
         ...     print(result.observation.echoed_message)
 
     Example with Docker:
@@ -39,17 +39,17 @@ class AgentenvEnv(
         >>> client = AgentenvEnv.from_docker_image("AgentEnv-env:latest")
         >>> try:
         ...     result = client.reset()
-        ...     result = client.step(AgentenvAction(message="Test"))
+        ...     result = client.step(SkyPlanAction(message="Test"))
         ... finally:
         ...     client.close()
     """
 
-    def _step_payload(self, action: AgentenvAction) -> Dict:
+    def _step_payload(self, action: SkyPlanAction) -> Dict:
         """
-        Convert AgentenvAction to JSON payload for step message.
+        Convert SkyPlanAction to JSON payload for step message.
 
         Args:
-            action: AgentenvAction instance
+            action: SkyPlanAction instance
 
         Returns:
             Dictionary representation suitable for JSON encoding
@@ -58,18 +58,18 @@ class AgentenvEnv(
             "message": action.message,
         }
 
-    def _parse_result(self, payload: Dict) -> StepResult[AgentenvObservation]:
+    def _parse_result(self, payload: Dict) -> StepResult[SkyPlanObservation]:
         """
-        Parse server response into StepResult[AgentenvObservation].
+        Parse server response into StepResult[SkyPlanObservation].
 
         Args:
             payload: JSON response data from server
 
         Returns:
-            StepResult with AgentenvObservation
+            StepResult with SkyPlanObservation
         """
         obs_data = payload.get("observation", {})
-        observation = AgentenvObservation(
+        observation = SkyPlanObservation(
             echoed_message=obs_data.get("echoed_message", ""),
             message_length=obs_data.get("message_length", 0),
             done=payload.get("done", False),

@@ -17,9 +17,9 @@ from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
 try:
-    from ..models import AgentenvAction, AgentenvObservation
+    from ..models import SkyPlanAction, SkyPlanObservation
 except ImportError:
-    from models import AgentenvAction, AgentenvObservation
+    from models import SkyPlanAction, SkyPlanObservation
 
 
 class AgentenvEnvironment(Environment):
@@ -34,7 +34,7 @@ class AgentenvEnvironment(Environment):
         >>> obs = env.reset()
         >>> print(obs.echoed_message)  # "Agentenv environment ready!"
         >>>
-        >>> obs = env.step(AgentenvAction(message="Hello"))
+        >>> obs = env.step(SkyPlanAction(message="Hello"))
         >>> print(obs.echoed_message)  # "Hello"
         >>> print(obs.message_length)  # 5
     """
@@ -50,32 +50,32 @@ class AgentenvEnvironment(Environment):
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._reset_count = 0
 
-    def reset(self) -> AgentenvObservation:
+    def reset(self) -> SkyPlanObservation:
         """
         Reset the environment.
 
         Returns:
-            AgentenvObservation with a ready message
+            SkyPlanObservation with a ready message
         """
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._reset_count += 1
 
-        return AgentenvObservation(
+        return SkyPlanObservation(
             echoed_message="Agentenv environment ready!",
             message_length=0,
             done=False,
             reward=0.0,
         )
 
-    def step(self, action: AgentenvAction) -> AgentenvObservation:  # type: ignore[override]
+    def step(self, action: SkyPlanAction) -> SkyPlanObservation:  # type: ignore[override]
         """
         Execute a step in the environment by echoing the message.
 
         Args:
-            action: AgentenvAction containing the message to echo
+            action: SkyPlanAction containing the message to echo
 
         Returns:
-            AgentenvObservation with the echoed message and its length
+            SkyPlanObservation with the echoed message and its length
         """
         self._state.step_count += 1
 
@@ -85,7 +85,7 @@ class AgentenvEnvironment(Environment):
         # Simple reward: longer messages get higher rewards
         reward = length * 0.1
 
-        return AgentenvObservation(
+        return SkyPlanObservation(
             echoed_message=message,
             message_length=length,
             done=False,
