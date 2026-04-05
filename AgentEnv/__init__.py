@@ -8,6 +8,17 @@
 
 from .client import AgentenvEnv
 from .models import AgentId, SkyPlanAction, SkyPlanObservation
+from .tasks import (
+    TASKS,
+    TaskConfig,
+    get_all_tasks,
+    get_agent_checklist,
+    get_task,
+    get_task_summary,
+    get_tasks_by_difficulty,
+    grade_agent_work,
+    grade_task,
+)
 from .workflow import (
     WORKFLOW,
     get_all_agent_ids,
@@ -33,6 +44,8 @@ __all__ = [
     "AgentenvEnv",
     "AgentId",
     "WORKFLOW",
+    "TASKS",
+    "TaskConfig",
     "get_all_agent_ids",
     "get_all_document_types",
     "get_allowed_actions",
@@ -48,4 +61,11 @@ __all__ = [
     "get_workflow_summary",
     "is_last_agent",
     "validate_action_for_agent",
+    "get_task",
+    "get_all_tasks",
+    "get_tasks_by_difficulty",
+    "get_task_summary",
+    "grade_task",
+    "grade_agent_work",
+    "get_agent_checklist",
 ]
