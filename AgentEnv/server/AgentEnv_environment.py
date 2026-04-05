@@ -20,7 +20,6 @@ from openenv.core.env_server.types import State
 try:
     from ..models import (
         ACTION_TO_DOCUMENT,
-        AgentId,
         Document,
         DocumentType,
         Feedback,
@@ -31,10 +30,14 @@ try:
         ValidationConfig,
         WorkflowConfig,
     )
+    from ..workflow import (
+        get_first_agent,
+        get_handoff_message,
+        get_next_agent,
+    )
 except ImportError:
     from models import (
         ACTION_TO_DOCUMENT,
-        AgentId,
         Document,
         DocumentType,
         Feedback,
@@ -44,6 +47,11 @@ except ImportError:
         SkyPlanObservation,
         ValidationConfig,
         WorkflowConfig,
+    )
+    from workflow import (
+        get_first_agent,
+        get_handoff_message,
+        get_next_agent,
     )
 
 
@@ -74,7 +82,7 @@ class SkyPlanEnvironment(Environment):
             total_steps: Total number of steps for the planning workflow
         """
         self._state = State(episode_id=str(uuid4()), step_count=0)
-        self._current_agent = AgentId.MAYA.value
+        self._current_agent = get_first_agent()
         self._step_number = 1
         self._total_steps = total_steps
         self._documents: dict[str, Document] = {}
@@ -88,10 +96,10 @@ class SkyPlanEnvironment(Environment):
         Reset the environment for a new episode.
 
         Returns:
-            SkyPlanObservation with initial state, ready for Maya to start
+            SkyPlanObservation with initial state, ready for the first agent to start
         """
         self._state = State(episode_id=str(uuid4()), step_count=0)
-        self._current_agent = AgentId.MAYA.value
+        self._current_agent = get_first_agent()
         self._step_number = 1
         self._documents = {}
         self._feedback = []
@@ -101,7 +109,7 @@ class SkyPlanEnvironment(Environment):
 
         return self._build_observation(
             result="Environment reset. Ready to begin planning.",
-            reasoning="Starting new planning episode with Maya (Research Analyst).",
+            reasoning="Starting new planning episode.",
             status="ready",
         )
 
@@ -147,9 +155,13 @@ class SkyPlanEnvironment(Environment):
         reward = self._calculate_reward(action)
 
         # 5. The Next Person: Move to next agent
-        next_agent = AgentId.get_next_agent(self._current_agent)
-        self._current_agent = next_agent
-        self._step_number += 1
+        next_agent = get_next_agent(self._current_agent)
+        if next_agent:
+            self._current_agent = next_agent
+            self._step_number += 1
+        else:
+            # No next agent - this is the end of the workflow
+            self._done = True
 
         # 6. Check if episode is done
         if self._step_number > self._total_steps:
@@ -163,9 +175,13 @@ class SkyPlanEnvironment(Environment):
             message=f"{action.action_type} completed successfully",
         )
 
+        # Get handoff message for the next agent
+        handoff_msg = get_handoff_message(action.agent_id)
+        reasoning_msg = f"Action processed by {action.agent_id}. {handoff_msg}"
+
         return self._build_observation(
             result=f"{action.action_type} completed successfully",
-            reasoning=f"Action processed by {action.agent_id}. Moving to {next_agent}.",
+            reasoning=reasoning_msg,
             status="in_progress",
             reward=reward,
         )

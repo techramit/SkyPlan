@@ -426,37 +426,60 @@ class AgentId(str, Enum):
 
     @classmethod
     def get_display_name(cls, agent_id: str) -> str:
-        """Get human-readable display name for an agent ID."""
-        names = {
-            cls.MAYA.value: "Maya (Research Analyst)",
-            cls.ELON.value: "Elon (Product Manager)",
-            cls.JORDAN.value: "Jordan (Architect)",
-            cls.ROBERT.value: "Robert (Execution Planner)",
-            cls.TAYLOR.value: "Taylor (Validator)",
-            cls.SAM.value: "Sam (CEO)",
-        }
-        return names.get(agent_id, agent_id)
+        """Get human-readable display name for an agent ID.
+
+        This method now delegates to the workflow module for data-driven configuration.
+
+        Args:
+            agent_id: The agent ID
+
+        Returns:
+            Human-readable display name
+        """
+        try:
+            from .workflow import get_agent_name
+            return get_agent_name(agent_id)
+        except ImportError:
+            # Fallback to hardcoded values if workflow module is not available
+            names = {
+                cls.MAYA.value: "Maya (Research Analyst)",
+                cls.ELON.value: "Elon (Product Manager)",
+                cls.JORDAN.value: "Jordan (Architect)",
+                cls.ROBERT.value: "Robert (Execution Planner)",
+                cls.TAYLOR.value: "Taylor (Validator)",
+                cls.SAM.value: "Sam (CEO)",
+            }
+            return names.get(agent_id, agent_id)
 
     @classmethod
     def get_next_agent(cls, current_agent: str) -> str:
         """Get the next agent in the workflow order.
 
+        This method now delegates to the workflow module for data-driven configuration.
+
         Args:
             current_agent: The current agent ID
 
         Returns:
-            The next agent ID in the workflow, or the first agent if at the end
+            The next agent ID in the workflow, or empty string if at the end
         """
         try:
-            current_index = cls.WORKFLOW_ORDER.index(cls(current_agent))
-            next_index = (current_index + 1) % len(cls.WORKFLOW_ORDER)
-            return cls.WORKFLOW_ORDER[next_index].value
-        except (ValueError, AttributeError):
-            return cls.MAYA.value
+            from .workflow import get_next_agent
+            return get_next_agent(current_agent) or ""
+        except ImportError:
+            # Fallback to hardcoded values if workflow module is not available
+            try:
+                current_index = cls.WORKFLOW_ORDER.index(cls(current_agent))
+                next_index = (current_index + 1) % len(cls.WORKFLOW_ORDER)
+                return cls.WORKFLOW_ORDER[next_index].value
+            except (ValueError, AttributeError):
+                return cls.MAYA.value
 
     @classmethod
     def get_workflow_position(cls, agent_id: str) -> int:
         """Get the position of an agent in the workflow (0-indexed).
+
+        This method now delegates to the workflow module for data-driven configuration.
 
         Args:
             agent_id: The agent ID
@@ -465,9 +488,14 @@ class AgentId(str, Enum):
             The position in the workflow, or -1 if not found
         """
         try:
-            return cls.WORKFLOW_ORDER.index(cls(agent_id))
-        except (ValueError, AttributeError):
-            return -1
+            from .workflow import get_workflow_position
+            return get_workflow_position(agent_id)
+        except ImportError:
+            # Fallback to hardcoded values if workflow module is not available
+            try:
+                return cls.WORKFLOW_ORDER.index(cls(agent_id))
+            except (ValueError, AttributeError):
+                return -1
 
 
 class ActionType(str, Enum):
@@ -569,52 +597,66 @@ class ActionType(str, Enum):
 
     @classmethod
     def get_allowed_actions_for_agent(cls, agent_id: str) -> list[str]:
-        """Get the list of actions that a specific agent can perform."""
-        agent_actions = {
-            AgentId.MAYA.value: [
-                cls.SEARCH_MARKET.value,
-                cls.ANALYZE_COMPETITORS.value,
-                cls.VALIDATE_PROBLEM.value,
-                cls.SUMMARIZE_INSIGHTS.value,
-                cls.IDENTIFY_OPPORTUNITIES.value,
-            ],
-            AgentId.ELON.value: [
-                cls.WRITE_PRD.value,
-                cls.DEFINE_FEATURES.value,
-                cls.IDENTIFY_USER_PERSONA.value,
-                cls.PRIORITIZE_FEATURES.value,
-                cls.DEFINE_SUCCESS_METRICS.value,
-            ],
-            AgentId.JORDAN.value: [
-                cls.DESIGN_ARCHITECTURE.value,
-                cls.SELECT_TECH_STACK.value,
-                cls.DEFINE_APIS.value,
-                cls.DESIGN_DATA_MODEL.value,
-                cls.WRITE_TRD.value,
-            ],
-            AgentId.ROBERT.value: [
-                cls.CREATE_ROADMAP.value,
-                cls.BREAK_INTO_TASKS.value,
-                cls.PLAN_SPRINTS.value,
-                cls.ESTIMATE_TIMELINES.value,
-                cls.DEFINE_DEPENDENCIES.value,
-            ],
-            AgentId.TAYLOR.value: [
-                cls.REVIEW_DOCUMENTS.value,
-                cls.CHECK_CONSISTENCY.value,
-                cls.VALIDATE_CLAIMS.value,
-                cls.IDENTIFY_RISKS.value,
-                cls.SCORE_PLAN.value,
-            ],
-            AgentId.SAM.value: [
-                cls.SET_DIRECTION.value,
-                cls.REVIEW_PLAN.value,
-                cls.APPROVE_STRATEGY.value,
-                cls.PRIORITIZE_OBJECTIVES.value,
-                cls.REQUEST_REVISION.value,
-            ],
-        }
-        return agent_actions.get(agent_id, [])
+        """Get the list of actions that a specific agent can perform.
+
+        This method now delegates to the workflow module for data-driven configuration.
+
+        Args:
+            agent_id: The agent ID
+
+        Returns:
+            List of action types allowed for this agent
+        """
+        try:
+            from .workflow import get_allowed_actions
+            return get_allowed_actions(agent_id)
+        except ImportError:
+            # Fallback to hardcoded values if workflow module is not available
+            agent_actions = {
+                "maya": [
+                    cls.SEARCH_MARKET.value,
+                    cls.ANALYZE_COMPETITORS.value,
+                    cls.VALIDATE_PROBLEM.value,
+                    cls.SUMMARIZE_INSIGHTS.value,
+                    cls.IDENTIFY_OPPORTUNITIES.value,
+                ],
+                "elon": [
+                    cls.WRITE_PRD.value,
+                    cls.DEFINE_FEATURES.value,
+                    cls.IDENTIFY_USER_PERSONA.value,
+                    cls.PRIORITIZE_FEATURES.value,
+                    cls.DEFINE_SUCCESS_METRICS.value,
+                ],
+                "jordan": [
+                    cls.DESIGN_ARCHITECTURE.value,
+                    cls.SELECT_TECH_STACK.value,
+                    cls.DEFINE_APIS.value,
+                    cls.DESIGN_DATA_MODEL.value,
+                    cls.WRITE_TRD.value,
+                ],
+                "robert": [
+                    cls.CREATE_ROADMAP.value,
+                    cls.BREAK_INTO_TASKS.value,
+                    cls.PLAN_SPRINTS.value,
+                    cls.ESTIMATE_TIMELINES.value,
+                    cls.DEFINE_DEPENDENCIES.value,
+                ],
+                "taylor": [
+                    cls.REVIEW_DOCUMENTS.value,
+                    cls.CHECK_CONSISTENCY.value,
+                    cls.VALIDATE_CLAIMS.value,
+                    cls.IDENTIFY_RISKS.value,
+                    cls.SCORE_PLAN.value,
+                ],
+                "sam": [
+                    cls.SET_DIRECTION.value,
+                    cls.REVIEW_PLAN.value,
+                    cls.APPROVE_STRATEGY.value,
+                    cls.PRIORITIZE_OBJECTIVES.value,
+                    cls.REQUEST_REVISION.value,
+                ],
+            }
+            return agent_actions.get(agent_id, [])
 
 
 # ============================================================================

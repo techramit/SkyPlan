@@ -13,13 +13,14 @@ from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
 from .models import SkyPlanAction, SkyPlanObservation
+from .workflow import get_first_agent
 
 
 class AgentenvEnv(
     EnvClient[SkyPlanAction, SkyPlanObservation, State]
 ):
     """
-    Client for the Agentenv Environment.
+    Client for the SkyPlan Environment.
 
     This client maintains a persistent WebSocket connection to the environment server,
     enabling efficient multi-step interactions with lower latency.
@@ -29,17 +30,23 @@ class AgentenvEnv(
         >>> # Connect to a running server
         >>> with AgentenvEnv(base_url="http://localhost:8000") as client:
         ...     result = client.reset()
-        ...     print(result.observation.echoed_message)
+        ...     print(result.observation.current_agent)
         ...
-        ...     result = client.step(SkyPlanAction(message="Hello!"))
-        ...     print(result.observation.echoed_message)
+        ...     action = SkyPlanAction(
+        ...         agent_id="maya",
+        ...         action_type="SEARCH_MARKET",
+        ...         reasoning="I need to research the market first",
+        ...         content="Market research content here..."
+        ...     )
+        ...     result = client.step(action)
+        ...     print(result.observation.result)
 
     Example with Docker:
         >>> # Automatically start container and connect
         >>> client = AgentenvEnv.from_docker_image("AgentEnv-env:latest")
         >>> try:
         ...     result = client.reset()
-        ...     result = client.step(SkyPlanAction(message="Test"))
+        ...     result = client.step(action)
         ... finally:
         ...     client.close()
     """
@@ -55,7 +62,10 @@ class AgentenvEnv(
             Dictionary representation suitable for JSON encoding
         """
         return {
-            "message": action.message,
+            "agent_id": action.agent_id,
+            "action_type": action.action_type,
+            "reasoning": action.reasoning,
+            "content": action.content,
         }
 
     def _parse_result(self, payload: Dict) -> StepResult[SkyPlanObservation]:
@@ -70,11 +80,20 @@ class AgentenvEnv(
         """
         obs_data = payload.get("observation", {})
         observation = SkyPlanObservation(
-            echoed_message=obs_data.get("echoed_message", ""),
-            message_length=obs_data.get("message_length", 0),
+            task_description=obs_data.get("task_description", ""),
+            result=obs_data.get("result", ""),
+            reasoning=obs_data.get("reasoning", ""),
+            current_agent=obs_data.get("current_agent", get_first_agent()),
+            step_number=obs_data.get("step_number", 1),
+            total_steps=obs_data.get("total_steps", 10),
+            documents=obs_data.get("documents", {}),
+            feedback=obs_data.get("feedback", []),
+            last_action_result=obs_data.get("last_action_result"),
+            current_state=obs_data.get("current_state", {}),
+            errors=obs_data.get("errors", []),
+            step_count=obs_data.get("step_count", 0),
             done=payload.get("done", False),
             reward=payload.get("reward"),
-            metadata=obs_data.get("metadata", {}),
         )
 
         return StepResult(
