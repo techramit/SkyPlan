@@ -245,28 +245,35 @@ class SkyPlanEnvironment(Environment):
 
         Args:
             action: The action containing the document content
+
+        Returns:
+            None
         """
         doc_type = ACTION_TO_DOCUMENT.get(action.action_type)
         if not doc_type:
             return  # Action doesn't produce a document
 
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        try:
+            timestamp = datetime.utcnow().isoformat() + "Z"
 
-        if doc_type in self._documents:
-            # Update existing document
-            self._documents[doc_type].content = action.content
-            self._documents[doc_type].author = action.agent_id
-            self._documents[doc_type].updated_at = timestamp
-        else:
-            # Create new document
-            self._documents[doc_type] = Document(
-                type=doc_type,
-                content=action.content,
-                author=action.agent_id,
-                created_at=timestamp,
-                updated_at=timestamp,
-                status="draft",
-            )
+            if doc_type in self._documents:
+                # Update existing document
+                self._documents[doc_type].content = action.content
+                self._documents[doc_type].author = action.agent_id
+                self._documents[doc_type].updated_at = timestamp
+            else:
+                # Create new document
+                self._documents[doc_type] = Document(
+                    type=doc_type,
+                    content=action.content,
+                    author=action.agent_id,
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                    status="draft",
+                )
+        except Exception as e:
+            # Log error but don't fail the step
+            print(f"Error filing document: {e}")
 
     def _calculate_reward(self, action: SkyPlanAction) -> float:
         """

@@ -744,8 +744,13 @@ def _build_documents_summary(documents: dict[str, Document]) -> str:
         return "No documents produced."
 
     lines = ["Documents produced:"]
+    total_content = sum(len(doc.content) for doc in documents.values())
+
+    # Adjust preview size based on total content to avoid memory issues
+    preview_size = min(500, max(100, total_content // len(documents)))
+
     for doc_type, doc in documents.items():
-        content_preview = doc.content[:500] if len(doc.content) > 500 else doc.content
+        content_preview = doc.content[:preview_size] if len(doc.content) > preview_size else doc.content
         lines.append(f"\n{doc_type}:")
         lines.append(f"  Author: {doc.author}")
         lines.append(f"  Status: {doc.status}")
