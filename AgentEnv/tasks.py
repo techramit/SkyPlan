@@ -12,6 +12,7 @@ that scores performance (0.0–1.0).
 """
 
 import json
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal
 
@@ -84,7 +85,32 @@ TASKS: dict[str, TaskConfig] = {
             "implementation",
         ],
     ),
-    # Hard task will be added later
+    "hard_saas_platform": TaskConfig(
+        task_id="hard_saas_platform",
+        name="Multi-tenant SaaS Platform",
+        difficulty="hard",
+        description="Build a multi-tenant SaaS platform with data isolation, subscription management, billing, analytics, and white-labeling capabilities.",
+        min_content_length=1000,
+        required_keywords=[
+            "saas",
+            "multi-tenant",
+            "data-isolation",
+            "subscription",
+            "billing",
+            "analytics",
+            "white-label",
+            "scalability",
+        ],
+        min_headers=5,
+        required_sections=[
+            "overview",
+            "architecture",
+            "data-model",
+            "security",
+            "implementation",
+            "scaling",
+        ],
+    ),
 }
 
 
@@ -119,6 +145,379 @@ AGENT_DOCUMENTS: dict[str, list[str]] = {
 
 
 # ============================================================================
+# Base Grader Class
+# ============================================================================
+
+
+class BaseGrader(ABC):
+    """Base class for grading tasks with common utility methods."""
+
+    @staticmethod
+    def check_document_length(documents: dict[str, Document], min_length: int) -> float:
+        """Check if documents meet minimum length requirements.
+
+        Args:
+            documents: All documents produced
+            min_length: Minimum content length per document
+
+        Returns:
+            Score in range 0.0 to 1.0
+        """
+        if not documents:
+            return 0.0
+
+        quality_count = sum(
+            1 for doc in documents.values() if len(doc.content) >= min_length
+        )
+        return quality_count / len(documents)
+
+    @staticmethod
+    def check_document_structure(documents: dict[str, Document], min_headers: int) -> float:
+        """Check if documents have proper structure (headers).
+
+        Args:
+            documents: All documents produced
+            min_headers: Minimum number of headers per document
+
+        Returns:
+            Score in range 0.0 to 1.0
+        """
+        if not documents:
+            return 0.0
+
+        structure_count = sum(
+            1 for doc in documents.values() if doc.content.count("##") >= min_headers
+        )
+        return structure_count / len(documents)
+
+    @staticmethod
+    def check_keyword_relevance(documents: dict[str, Document], keywords: list[str]) -> float:
+        """Check if documents contain required keywords.
+
+        Args:
+            documents: All documents produced
+            keywords: Required keywords
+
+        Returns:
+            Score in range 0.0 to 1.0
+        """
+        if not documents or not keywords:
+            return 0.0
+
+        relevance_count = sum(
+            1
+            for doc in documents.values()
+            if any(keyword.lower() in doc.content.lower() for keyword in keywords)
+        )
+        return relevance_count / len(documents)
+
+    @staticmethod
+    def check_completeness(documents: dict[str, Document], required_docs: list[str]) -> float:
+        """Check if all required documents are present.
+
+        Args:
+            documents: All documents produced
+            required_docs: List of required document types
+
+        Returns:
+            Score in range 0.0 to 1.0
+        """
+        if not required_docs:
+            return 1.0
+
+        present = sum(1 for doc_type in required_docs if doc_type in documents)
+        return present / len(required_docs)
+
+    @staticmethod
+    def check_section_presence(documents: dict[str, Document], required_sections: list[str]) -> float:
+        """Check if documents contain required sections.
+
+        Args:
+            documents: All documents produced
+            required_sections: List of required section names
+
+        Returns:
+            Score in range 0.0 to 1.0
+        """
+        if not documents or not required_sections:
+            return 0.0
+
+        section_count = 0
+        total_checks = len(documents) * len(required_sections)
+
+        for doc in documents.values():
+            for section in required_sections:
+                if section.lower() in doc.content.lower():
+                    section_count += 1
+
+        return section_count / total_checks if total_checks > 0 else 0.0
+
+
+# ============================================================================
+# Grade Map for Composite Scoring
+# ============================================================================
+
+
+GRADE_MAP: dict[str, dict] = {
+    "consistency_checks": {
+        "prd_vs_trd": {
+            "name": "PRD vs TRD Consistency",
+            "description": "Check if PRD features align with TRD technical requirements",
+            "documents": ["PRD", "TRD"],
+            "check_function": "_check_prd_trd_consistency",
+        },
+        "architecture_vs_roadmap": {
+            "name": "Architecture vs Roadmap Consistency",
+            "description": "Check if architecture complexity matches roadmap timelines",
+            "documents": ["ARCHITECTURE", "ROADMAP"],
+            "check_function": "_check_architecture_roadmap_consistency",
+        },
+        "tasks_vs_roadmap": {
+            "name": "Tasks vs Roadmap Consistency",
+            "description": "Check if tasks align with roadmap phases",
+            "documents": ["TASKS", "ROADMAP"],
+            "check_function": "_check_tasks_roadmap_consistency",
+        },
+        "research_vs_prd": {
+            "name": "Research vs PRD Consistency",
+            "description": "Check if PRD addresses research findings",
+            "documents": ["RESEARCH", "PRD"],
+            "check_function": "_check_research_prd_consistency",
+        },
+        "validation_vs_all": {
+            "name": "Validation vs All Documents",
+            "description": "Check if validation addresses all documents",
+            "documents": ["VALIDATION"],
+            "check_function": "_check_validation_completeness",
+        },
+    },
+    "agent_criteria": {
+        "maya": {
+            "required_sections": ["market-analysis", "competitors", "opportunities"],
+            "min_findings": 3,
+        },
+        "elon": {
+            "required_sections": ["requirements", "features", "user-personas", "success-metrics"],
+            "min_features": 5,
+        },
+        "jordan": {
+            "required_sections": ["architecture", "tech-stack", "apis", "data-model"],
+            "min_components": 4,
+        },
+        "robert": {
+            "required_sections": ["roadmap", "phases", "tasks", "timelines"],
+            "min_phases": 3,
+        },
+        "taylor": {
+            "required_sections": ["validation", "consistency", "risks", "recommendations"],
+            "min_checks": 3,
+        },
+        "sam": {
+            "required_sections": ["strategy", "priorities", "approval", "next-steps"],
+            "min_objectives": 3,
+        },
+    },
+}
+
+
+# ============================================================================
+# Composite Scoring Functions
+# ============================================================================
+
+
+def _check_prd_trd_consistency(documents: dict[str, Document]) -> float:
+    """Check if PRD features align with TRD technical requirements.
+
+    Args:
+        documents: All documents produced
+
+    Returns:
+        Consistency score in range 0.0 to 1.0
+    """
+    if "PRD" not in documents or "TRD" not in documents:
+        return 0.0
+
+    prd = documents["PRD"].content.lower()
+    trd = documents["TRD"].content.lower()
+
+    # Check for common feature mentions
+    prd_features = ["feature", "requirement", "functionality", "capability"]
+    trd_features = ["implement", "api", "endpoint", "service", "component"]
+
+    prd_has_features = sum(1 for f in prd_features if f in prd)
+    trd_has_features = sum(1 for f in trd_features if f in trd)
+
+    # Check if PRD mentions are addressed in TRD
+    consistency = min(prd_has_features, trd_has_features) / max(prd_has_features, trd_has_features, 1)
+
+    return consistency
+
+
+def _check_architecture_roadmap_consistency(documents: dict[str, Document]) -> float:
+    """Check if architecture complexity matches roadmap timelines.
+
+    Args:
+        documents: All documents produced
+
+    Returns:
+        Consistency score in range 0.0 to 1.0
+    """
+    if "ARCHITECTURE" not in documents or "ROADMAP" not in documents:
+        return 0.0
+
+    arch = documents["ARCHITECTURE"].content.lower()
+    roadmap = documents["ROADMAP"].content.lower()
+
+    # Check for complexity indicators
+    arch_complexity = ["microservice", "component", "module", "service", "layer"]
+    roadmap_phases = ["phase", "milestone", "sprint", "quarter", "month"]
+
+    arch_score = sum(1 for c in arch_complexity if c in arch)
+    roadmap_score = sum(1 for r in roadmap_phases if r in roadmap)
+
+    # More complex architecture should have more phases
+    if arch_score > 3 and roadmap_score < 2:
+        return 0.5  # Complex architecture needs more phases
+    if arch_score <= 2 and roadmap_score > 4:
+        return 0.5  # Simple architecture shouldn't have too many phases
+
+    return min(arch_score, roadmap_score) / max(arch_score, roadmap_score, 1)
+
+
+def _check_tasks_vs_roadmap_consistency(documents: dict[str, Document]) -> float:
+    """Check if tasks align with roadmap phases.
+
+    Args:
+        documents: All documents produced
+
+    Returns:
+        Consistency score in range 0.0 to 1.0
+    """
+    if "TASKS" not in documents or "ROADMAP" not in documents:
+        return 0.0
+
+    tasks = documents["TASKS"].content.lower()
+    roadmap = documents["ROADMAP"].content.lower()
+
+    # Check for task and phase mentions
+    task_mentions = ["task", "story", "ticket", "item"]
+    phase_mentions = ["phase", "milestone", "sprint", "iteration"]
+
+    task_score = sum(1 for t in task_mentions if t in tasks)
+    phase_score = sum(1 for p in phase_mentions if p in roadmap)
+
+    # Tasks should reference roadmap phases
+    if task_score > 0 and phase_score > 0:
+        return 1.0
+    return 0.5
+
+
+def _check_research_prd_consistency(documents: dict[str, Document]) -> float:
+    """Check if PRD addresses research findings.
+
+    Args:
+        documents: All documents produced
+
+    Returns:
+        Consistency score in range 0.0 to 1.0
+    """
+    if "RESEARCH" not in documents or "PRD" not in documents:
+        return 0.0
+
+    research = documents["RESEARCH"].content.lower()
+    prd = documents["PRD"].content.lower()
+
+    # Check for research findings in PRD
+    research_keywords = ["market", "competitor", "user", "need", "problem"]
+    prd_mentions = sum(1 for kw in research_keywords if kw in prd)
+
+    return prd_mentions / len(research_keywords)
+
+
+def _check_validation_completeness(documents: dict[str, Document]) -> float:
+    """Check if validation addresses all documents.
+
+    Args:
+        documents: All documents produced
+
+    Returns:
+        Completeness score in range 0.0 to 1.0
+    """
+    if "VALIDATION" not in documents:
+        return 0.0
+
+    validation = documents["VALIDATION"].content.lower()
+
+    # Check if validation mentions other documents
+    doc_mentions = sum(
+        1
+        for doc_type in REQUIRED_DOCUMENTS
+        if doc_type.lower() in validation
+    )
+
+    return doc_mentions / len(REQUIRED_DOCUMENTS)
+
+
+def calculate_composite_score(documents: dict[str, Document]) -> float:
+    """Calculate composite score based on consistency checks.
+
+    Args:
+        documents: All documents produced
+
+    Returns:
+        Composite score in range 0.0 to 1.0
+    """
+    consistency_checks = GRADE_MAP["consistency_checks"]
+    scores = []
+
+    for check_id, check_config in consistency_checks.items():
+        check_function = check_config["check_function"]
+        if check_function in globals():
+            score = globals()[check_function](documents)
+            scores.append(score)
+
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+def calculate_agent_criteria_score(agent_id: str, documents: dict[str, Document]) -> float:
+    """Calculate score based on agent-specific criteria.
+
+    Args:
+        agent_id: The agent ID
+        documents: All documents produced
+
+    Returns:
+        Score in range 0.0 to 1.0
+    """
+    if agent_id not in GRADE_MAP["agent_criteria"]:
+        return 0.0
+
+    criteria = GRADE_MAP["agent_criteria"][agent_id]
+    agent_docs = AGENT_DOCUMENTS.get(agent_id, [])
+
+    if not agent_docs:
+        return 0.0
+
+    total_score = 0.0
+    total_checks = 0
+
+    for doc_type in agent_docs:
+        if doc_type not in documents:
+            continue
+
+        doc = documents[doc_type]
+        content = doc.content.lower()
+
+        # Check for required sections
+        for section in criteria["required_sections"]:
+            total_checks += 1
+            if section in content:
+                total_score += 1.0
+
+    return total_score / total_checks if total_checks > 0 else 0.0
+
+
+# ============================================================================
 # Grader Functions
 # ============================================================================
 
@@ -133,9 +532,10 @@ def grade_task(
     Grade the final output for a task.
 
     The grader evaluates:
-    1. Completeness (30%): Are all required documents present?
-    2. Content Quality (30%): Do documents have sufficient content?
-    3. Realism (40%): Are documents well-structured and relevant?
+    1. Completeness (25%): Are all required documents present?
+    2. Content Quality (25%): Do documents have sufficient content?
+    3. Realism (25%): Are documents well-structured and relevant?
+    4. Composite Consistency (25%): Do documents align with each other? (hard task only)
 
     Args:
         task_id: The task being graded
@@ -151,8 +551,11 @@ def grade_task(
 
     task = TASKS[task_id]
 
+    # Use base grader for common checks
+    grader = BaseGrader()
+
     # Calculate individual scores
-    completeness = _calculate_completeness(documents)
+    completeness = grader.check_completeness(documents, REQUIRED_DOCUMENTS)
 
     # Use LLM for quality assessment if API key is provided and use_llm is True
     if use_llm and api_key:
@@ -161,11 +564,24 @@ def grade_task(
         realism = llm_scores["realism"]
     else:
         # Fallback to rule-based grading
-        quality = _calculate_content_quality(documents, task.min_content_length)
-        realism = _calculate_realism(documents, task)
+        quality = grader.check_document_length(documents, task.min_content_length)
+        structure = grader.check_document_structure(documents, task.min_headers)
+        relevance = grader.check_keyword_relevance(documents, task.required_keywords)
+        realism = (structure + relevance) / 2
 
-    # Weighted sum
-    final_score = (completeness * 0.3) + (quality * 0.3) + (realism * 0.4)
+    # Composite consistency score (only for hard task)
+    if task.difficulty == "hard":
+        composite = calculate_composite_score(documents)
+        # Weighted sum with composite scoring
+        final_score = (
+            completeness * 0.25 +
+            quality * 0.25 +
+            realism * 0.25 +
+            composite * 0.25
+        )
+    else:
+        # Weighted sum without composite scoring
+        final_score = (completeness * 0.3) + (quality * 0.3) + (realism * 0.4)
 
     # Clamp to [0.0, 1.0]
     return max(0.0, min(1.0, final_score))
@@ -181,11 +597,8 @@ def _calculate_completeness(documents: dict[str, Document]) -> float:
     Returns:
         Completeness score in range 0.0 to 1.0
     """
-    if not REQUIRED_DOCUMENTS:
-        return 1.0
-
-    present = sum(1 for doc_type in REQUIRED_DOCUMENTS if doc_type in documents)
-    return present / len(REQUIRED_DOCUMENTS)
+    grader = BaseGrader()
+    return grader.check_completeness(documents, REQUIRED_DOCUMENTS)
 
 
 def _calculate_content_quality(documents: dict[str, Document], min_length: int) -> float:
@@ -199,13 +612,8 @@ def _calculate_content_quality(documents: dict[str, Document], min_length: int) 
     Returns:
         Content quality score in range 0.0 to 1.0
     """
-    if not documents:
-        return 0.0
-
-    quality_count = sum(
-        1 for doc in documents.values() if len(doc.content) >= min_length
-    )
-    return quality_count / len(documents)
+    grader = BaseGrader()
+    return grader.check_document_length(documents, min_length)
 
 
 def _calculate_realism(documents: dict[str, Document], task: TaskConfig) -> float:
@@ -219,11 +627,9 @@ def _calculate_realism(documents: dict[str, Document], task: TaskConfig) -> floa
     Returns:
         Realism score in range 0.0 to 1.0
     """
-    if not documents:
-        return 0.0
-
-    structure = _calculate_structure_score(documents, task.min_headers)
-    relevance = _calculate_relevance_score(documents, task.required_keywords)
+    grader = BaseGrader()
+    structure = grader.check_document_structure(documents, task.min_headers)
+    relevance = grader.check_keyword_relevance(documents, task.required_keywords)
 
     return (structure + relevance) / 2
 
@@ -239,13 +645,8 @@ def _calculate_structure_score(documents: dict[str, Document], min_headers: int)
     Returns:
         Structure score in range 0.0 to 1.0
     """
-    if not documents:
-        return 0.0
-
-    structure_count = sum(
-        1 for doc in documents.values() if doc.content.count("##") >= min_headers
-    )
-    return structure_count / len(documents)
+    grader = BaseGrader()
+    return grader.check_document_structure(documents, min_headers)
 
 
 def _calculate_relevance_score(documents: dict[str, Document], keywords: list[str]) -> float:
@@ -259,15 +660,8 @@ def _calculate_relevance_score(documents: dict[str, Document], keywords: list[st
     Returns:
         Relevance score in range 0.0 to 1.0
     """
-    if not documents or not keywords:
-        return 0.0
-
-    relevance_count = sum(
-        1
-        for doc in documents.values()
-        if any(keyword.lower() in doc.content.lower() for keyword in keywords)
-    )
-    return relevance_count / len(documents)
+    grader = BaseGrader()
+    return grader.check_keyword_relevance(documents, keywords)
 
 
 # ============================================================================
@@ -567,6 +961,67 @@ def get_agent_checklist(agent_id: str, task_id: str | None = None) -> list[str]:
                 "Approve the strategy and priorities",
                 "Evaluate competitive positioning",
                 "Prioritize objectives and milestones",
+                "Produce STRATEGY document",
+            ],
+        },
+        "hard_saas_platform": {
+            "maya": [
+                "Research multi-tenant SaaS patterns and best practices",
+                "Analyze competitors (Salesforce, HubSpot, Stripe)",
+                "Identify data isolation strategies",
+                "Research subscription and billing models",
+                "Research white-labeling approaches",
+                "Identify compliance requirements (GDPR, SOC2)",
+                "Summarize key insights",
+                "Produce RESEARCH document",
+            ],
+            "elon": [
+                "Define SaaS platform requirements",
+                "Identify user personas (admin, user, guest)",
+                "Define subscription tiers and pricing",
+                "Define success metrics (MRR, churn, LTV)",
+                "Prioritize features (multi-tenancy, billing, analytics, white-label)",
+                "Define white-labeling requirements",
+                "Produce PRD document",
+            ],
+            "jordan": [
+                "Design multi-tenant architecture",
+                "Select technology stack (microservices, databases, caching)",
+                "Define data isolation strategy (per-tenant databases, schemas)",
+                "Design billing and subscription system",
+                "Design analytics and reporting system",
+                "Design white-labeling system",
+                "Define APIs and data models",
+                "Write TRD document",
+                "Produce ARCHITECTURE document",
+            ],
+            "robert": [
+                "Create implementation roadmap",
+                "Break down into tasks and sprints",
+                "Plan for scalability (horizontal scaling, sharding)",
+                "Plan for data migration and onboarding",
+                "Estimate timelines and dependencies",
+                "Define testing strategy (integration, E2E, performance)",
+                "Define deployment strategy (CI/CD, blue-green deployments)",
+                "Produce ROADMAP and TASKS documents",
+            ],
+            "taylor": [
+                "Review all documents for consistency",
+                "Validate technical claims",
+                "Identify scalability and performance risks",
+                "Check for security and compliance considerations",
+                "Validate data isolation guarantees",
+                "Check billing and subscription logic",
+                "Validate white-labeling implementation",
+                "Produce VALIDATION document",
+            ],
+            "sam": [
+                "Set strategic direction for SaaS platform",
+                "Review the complete plan",
+                "Approve the strategy and priorities",
+                "Evaluate competitive positioning",
+                "Prioritize objectives and milestones",
+                "Review go-to-market strategy",
                 "Produce STRATEGY document",
             ],
         },

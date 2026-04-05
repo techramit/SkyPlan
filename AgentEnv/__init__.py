@@ -9,8 +9,14 @@
 from .client import AgentenvEnv
 from .models import AgentId, SkyPlanAction, SkyPlanObservation
 from .tasks import (
+    AGENT_DOCUMENTS,
+    BaseGrader,
+    GRADE_MAP,
+    REQUIRED_DOCUMENTS,
     TASKS,
     TaskConfig,
+    calculate_agent_criteria_score,
+    calculate_composite_score,
     get_all_tasks,
     get_agent_checklist,
     get_task,
@@ -46,6 +52,10 @@ __all__ = [
     "WORKFLOW",
     "TASKS",
     "TaskConfig",
+    "BaseGrader",
+    "GRADE_MAP",
+    "REQUIRED_DOCUMENTS",
+    "AGENT_DOCUMENTS",
     "get_all_agent_ids",
     "get_all_document_types",
     "get_allowed_actions",
@@ -68,4 +78,6 @@ __all__ = [
     "grade_task",
     "grade_agent_work",
     "get_agent_checklist",
+    "calculate_composite_score",
+    "calculate_agent_criteria_score",
 ]
