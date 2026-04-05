@@ -11,8 +11,11 @@ Each task defines a concrete objective with a programmatic grader
 that scores performance (0.0–1.0).
 """
 
+import json
 from dataclasses import dataclass
 from typing import Literal
+
+from openai import OpenAI
 
 from .models import Document
 
@@ -59,7 +62,29 @@ TASKS: dict[str, TaskConfig] = {
         min_headers=1,
         required_sections=["overview", "implementation"],
     ),
-    # Medium and hard tasks will be added later
+    "medium_chat_app": TaskConfig(
+        task_id="medium_chat_app",
+        name="Real-time Chat Application",
+        difficulty="medium",
+        description="Build a real-time chat application similar to WhatsApp with messaging, online status, and notifications.",
+        min_content_length=500,
+        required_keywords=[
+            "chat",
+            "real-time",
+            "websocket",
+            "message",
+            "online",
+            "notification",
+        ],
+        min_headers=3,
+        required_sections=[
+            "overview",
+            "features",
+            "architecture",
+            "implementation",
+        ],
+    ),
+    # Hard task will be added later
 }
 
 
@@ -98,7 +123,12 @@ AGENT_DOCUMENTS: dict[str, list[str]] = {
 # ============================================================================
 
 
-def grade_task(task_id: str, documents: dict[str, Document]) -> float:
+def grade_task(
+    task_id: str,
+    documents: dict[str, Document],
+    api_key: str | None = None,
+    use_llm: bool = True,
+) -> float:
     """
     Grade the final output for a task.
 
@@ -110,6 +140,8 @@ def grade_task(task_id: str, documents: dict[str, Document]) -> float:
     Args:
         task_id: The task being graded
         documents: All documents produced by the agents
+        api_key: Nvidia NIM API key for LLM grading (optional)
+        use_llm: Whether to use LLM for quality assessment (default: True)
 
     Returns:
         Score in range 0.0 to 1.0
@@ -121,8 +153,16 @@ def grade_task(task_id: str, documents: dict[str, Document]) -> float:
 
     # Calculate individual scores
     completeness = _calculate_completeness(documents)
-    quality = _calculate_content_quality(documents, task.min_content_length)
-    realism = _calculate_realism(documents, task)
+
+    # Use LLM for quality assessment if API key is provided and use_llm is True
+    if use_llm and api_key:
+        llm_scores = _llm_grade_content(task_id, documents, api_key)
+        quality = llm_scores["content_quality"]
+        realism = llm_scores["realism"]
+    else:
+        # Fallback to rule-based grading
+        quality = _calculate_content_quality(documents, task.min_content_length)
+        realism = _calculate_realism(documents, task)
 
     # Weighted sum
     final_score = (completeness * 0.3) + (quality * 0.3) + (realism * 0.4)
@@ -231,11 +271,154 @@ def _calculate_relevance_score(documents: dict[str, Document], keywords: list[st
 
 
 # ============================================================================
+# LLM-Based Grading
+# ============================================================================
+
+
+def _llm_grade_content(
+    task_id: str,
+    documents: dict[str, Document],
+    api_key: str,
+    base_url: str = "https://integrate.api.nvidia.com/v1",
+    model: str = "meta/llama-3.1-405b-instruct",
+) -> dict[str, float]:
+    """
+    Use LLM to grade content quality and realism.
+
+    Args:
+        task_id: The task being graded
+        documents: All documents produced
+        api_key: Nvidia NIM API key
+        base_url: Nvidia NIM API base URL
+        model: Model to use for grading
+
+    Returns:
+        Dictionary with content_quality and realism scores (0.0-1.0)
+    """
+    task = TASKS[task_id]
+
+    # Build documents summary
+    docs_summary = _build_documents_summary(documents)
+
+    # Build the prompt
+    prompt = _build_grading_prompt(task, docs_summary)
+
+    # Call the LLM
+    client = OpenAI(api_key=api_key, base_url=base_url)
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert evaluator of technical planning documents. Grade objectively and consistently.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,  # Deterministic
+            response_format={"type": "json_object"},
+        )
+
+        # Parse the response
+        result = json.loads(response.choices[0].message.content)
+
+        return {
+            "content_quality": float(result.get("content_quality", 0.0)),
+            "realism": float(result.get("realism", 0.0)),
+        }
+    except Exception as e:
+        # Fallback to rule-based grading on error
+        print(f"LLM grading failed: {e}. Falling back to rule-based grading.")
+        return {
+            "content_quality": _calculate_content_quality(documents, task.min_content_length),
+            "realism": _calculate_realism(documents, task),
+        }
+
+
+def _build_documents_summary(documents: dict[str, Document]) -> str:
+    """
+    Build a summary of all documents for LLM grading.
+
+    Args:
+        documents: All documents produced
+
+    Returns:
+        Formatted summary string
+    """
+    if not documents:
+        return "No documents produced."
+
+    lines = ["Documents produced:"]
+    for doc_type, doc in documents.items():
+        content_preview = doc.content[:500] if len(doc.content) > 500 else doc.content
+        lines.append(f"\n{doc_type}:")
+        lines.append(f"  Author: {doc.author}")
+        lines.append(f"  Status: {doc.status}")
+        lines.append(f"  Content: {content_preview}...")
+        lines.append(f"  Length: {len(doc.content)} characters")
+
+    return "\n".join(lines)
+
+
+def _build_grading_prompt(task: TaskConfig, docs_summary: str) -> str:
+    """
+    Build the grading prompt for the LLM.
+
+    Args:
+        task: Task configuration
+        docs_summary: Summary of documents
+
+    Returns:
+        Formatted prompt string
+    """
+    return f"""Grade the following planning documents on a scale of 0.0 to 1.0.
+
+Task: {task.name}
+Difficulty: {task.difficulty}
+Description: {task.description}
+
+Required Keywords: {', '.join(task.required_keywords)}
+Minimum Content Length: {task.min_content_length} characters
+Minimum Headers: {task.min_headers}
+
+{docs_summary}
+
+Evaluate on:
+
+1. Content Quality (0.0-1.0):
+   - Is the content substantive and detailed?
+   - Is the reasoning sound and well-justified?
+   - Are the claims supported with evidence?
+   - Is the writing clear and professional?
+
+2. Realism (0.0-1.0):
+   - Is the technical plan realistic and feasible?
+   - Are the timelines reasonable?
+   - Did they consider edge cases and risks?
+   - Is the architecture sound and appropriate?
+
+Return a JSON object with:
+{{
+    "content_quality": 0.0-1.0,
+    "realism": 0.0-1.0
+}}
+
+Be objective and consistent in your grading."""
+
+
+# ============================================================================
 # Agent-Specific Grading
 # ============================================================================
 
 
-def grade_agent_work(agent_id: str, documents: dict[str, Document], task: TaskConfig) -> float:
+def grade_agent_work(
+    agent_id: str,
+    documents: dict[str, Document],
+    task: TaskConfig,
+    api_key: str | None = None,
+    use_llm: bool = True,
+) -> float:
     """
     Grade the work of a specific agent.
 
@@ -243,6 +426,8 @@ def grade_agent_work(agent_id: str, documents: dict[str, Document], task: TaskCo
         agent_id: The agent ID to grade
         documents: All documents produced
         task: Task configuration
+        api_key: Nvidia NIM API key for LLM grading (optional)
+        use_llm: Whether to use LLM for quality assessment (default: True)
 
     Returns:
         Score in range 0.0 to 1.0 for this agent's work
@@ -259,72 +444,137 @@ def grade_agent_work(agent_id: str, documents: dict[str, Document], task: TaskCo
     # Check if all required documents are present
     completeness = len(agent_docs) / len(required_docs)
 
-    # Check content quality
-    quality = _calculate_content_quality(agent_docs, task.min_content_length)
-
-    # Check relevance
-    relevance = _calculate_relevance_score(agent_docs, task.required_keywords)
+    # Use LLM for quality assessment if API key is provided and use_llm is True
+    if use_llm and api_key:
+        llm_scores = _llm_grade_content(task.task_id, agent_docs, api_key)
+        quality = llm_scores["content_quality"]
+        relevance = llm_scores["realism"]
+    else:
+        # Fallback to rule-based grading
+        quality = _calculate_content_quality(agent_docs, task.min_content_length)
+        relevance = _calculate_relevance_score(agent_docs, task.required_keywords)
 
     # Average the scores
     return (completeness + quality + relevance) / 3
 
 
-def get_agent_checklist(agent_id: str) -> list[str]:
+def get_agent_checklist(agent_id: str, task_id: str | None = None) -> list[str]:
     """
     Get the checklist for a specific agent.
 
     Args:
         agent_id: The agent ID
+        task_id: The task ID (optional, defaults to easy task if not provided)
 
     Returns:
         List of checklist items for this agent
     """
-    checklists: dict[str, list[str]] = {
-        "maya": [
-            "Research authentication patterns and best practices",
-            "Analyze competitors' authentication systems",
-            "Identify security considerations",
-            "Summarize key insights",
-            "Produce RESEARCH document",
-        ],
-        "elon": [
-            "Define authentication requirements",
-            "Identify user personas",
-            "Define success metrics",
-            "Prioritize features",
-            "Produce PRD document",
-        ],
-        "jordan": [
-            "Design authentication architecture",
-            "Select technology stack",
-            "Define APIs and data model",
-            "Write TRD document",
-            "Produce ARCHITECTURE document",
-        ],
-        "robert": [
-            "Create implementation roadmap",
-            "Break down into tasks",
-            "Plan sprints",
-            "Estimate timelines",
-            "Produce ROADMAP and TASKS documents",
-        ],
-        "taylor": [
-            "Review all documents",
-            "Check consistency",
-            "Validate claims",
-            "Identify risks",
-            "Produce VALIDATION document",
-        ],
-        "sam": [
-            "Set strategic direction",
-            "Review the complete plan",
-            "Approve the strategy",
-            "Prioritize objectives",
-            "Produce STRATEGY document",
-        ],
+    # Default to easy task if no task_id provided
+    if task_id is None:
+        task_id = "easy_user_authentication"
+
+    # Task-specific checklists
+    task_checklists: dict[str, dict[str, list[str]]] = {
+        "easy_user_authentication": {
+            "maya": [
+                "Research authentication patterns and best practices",
+                "Analyze competitors' authentication systems",
+                "Identify security considerations",
+                "Summarize key insights",
+                "Produce RESEARCH document",
+            ],
+            "elon": [
+                "Define authentication requirements",
+                "Identify user personas",
+                "Define success metrics",
+                "Prioritize features",
+                "Produce PRD document",
+            ],
+            "jordan": [
+                "Design authentication architecture",
+                "Select technology stack",
+                "Define APIs and data model",
+                "Write TRD document",
+                "Produce ARCHITECTURE document",
+            ],
+            "robert": [
+                "Create implementation roadmap",
+                "Break down into tasks",
+                "Plan sprints",
+                "Estimate timelines",
+                "Produce ROADMAP and TASKS documents",
+            ],
+            "taylor": [
+                "Review all documents",
+                "Check consistency",
+                "Validate claims",
+                "Identify risks",
+                "Produce VALIDATION document",
+            ],
+            "sam": [
+                "Set strategic direction",
+                "Review the complete plan",
+                "Approve the strategy",
+                "Prioritize objectives",
+                "Produce STRATEGY document",
+            ],
+        },
+        "medium_chat_app": {
+            "maya": [
+                "Research real-time chat patterns and best practices",
+                "Analyze competitors (WhatsApp, Slack, Discord)",
+                "Identify WebSocket and messaging protocols",
+                "Research online status and notification systems",
+                "Summarize key insights",
+                "Produce RESEARCH document",
+            ],
+            "elon": [
+                "Define chat application requirements",
+                "Identify user personas and use cases",
+                "Define success metrics (latency, engagement)",
+                "Prioritize features (messaging, status, notifications)",
+                "Define user experience goals",
+                "Produce PRD document",
+            ],
+            "jordan": [
+                "Design real-time chat architecture",
+                "Select technology stack (WebSocket, database, caching)",
+                "Define APIs and data models",
+                "Design message ordering and delivery system",
+                "Design online status and notification system",
+                "Write TRD document",
+                "Produce ARCHITECTURE document",
+            ],
+            "robert": [
+                "Create implementation roadmap",
+                "Break down into tasks and sprints",
+                "Plan for scalability and performance",
+                "Estimate timelines and dependencies",
+                "Define testing strategy",
+                "Produce ROADMAP and TASKS documents",
+            ],
+            "taylor": [
+                "Review all documents for consistency",
+                "Validate technical claims",
+                "Identify scalability and performance risks",
+                "Check for security considerations",
+                "Validate message ordering guarantees",
+                "Produce VALIDATION document",
+            ],
+            "sam": [
+                "Set strategic direction for chat platform",
+                "Review the complete plan",
+                "Approve the strategy and priorities",
+                "Evaluate competitive positioning",
+                "Prioritize objectives and milestones",
+                "Produce STRATEGY document",
+            ],
+        },
     }
 
-    return checklists.get(agent_id, [])
+    # Get task-specific checklists, or empty list if not found
+    task_checklist = task_checklists.get(task_id, {})
+    return task_checklist.get(agent_id, [])
 
 
 # ============================================================================
