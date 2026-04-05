@@ -1,2 +1,3 @@
 .env
 Docs/PVT.md
+__pycache__/
