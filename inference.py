@@ -41,6 +41,7 @@ from AgentEnv import (
     get_task_summary,
 )
 from AgentEnv.client import AgentenvEnv
+from AgentEnv.prompts import get_agent_prompt
 from AgentEnv.reward import RewardCalculator
 
 
@@ -131,74 +132,8 @@ def log_end(
 # Agent System Prompts
 # ============================================================================
 
-
-def get_agent_system_prompt(agent_id: str) -> str:
-    """Get the system prompt for a specific agent.
-
-    Args:
-        agent_id: The agent ID
-
-    Returns:
-        System prompt for the agent
-    """
-    agent_entry = get_workflow_entry(agent_id)
-    if not agent_entry:
-        return "You are a helpful assistant."
-
-    role = agent_entry.get("role", "Assistant")
-    responsibilities = agent_entry.get("responsibilities", [])
-    produces = agent_entry.get("produces", [])
-
-    prompt_parts = [
-        f"You are {role} in a multi-agent planning team.",
-        f"Your role is to: {', '.join(responsibilities)}.",
-        f"You will produce: {', '.join(produces)}.",
-    ]
-
-    # Add specific instructions based on agent
-    if agent_id == "maya":
-        prompt_parts.append(
-            "Focus on market research, competitive analysis, and identifying opportunities. "
-            "Be thorough and data-driven."
-        )
-    elif agent_id == "elon":
-        prompt_parts.append(
-            "Focus on defining clear product requirements and features. "
-            "Think about user needs and success metrics."
-        )
-    elif agent_id == "jordan":
-        prompt_parts.append(
-            "Focus on technical architecture and design. "
-            "Consider scalability, maintainability, and best practices."
-        )
-    elif agent_id == "robert":
-        prompt_parts.append(
-            "Focus on creating a realistic roadmap and task breakdown. "
-            "Consider dependencies, timelines, and resource constraints."
-        )
-    elif agent_id == "taylor":
-        prompt_parts.append(
-            "Focus on validating all documents for quality and consistency. "
-            "Check for contradictions, risks, and missing information."
-        )
-    elif agent_id == "sam":
-        prompt_parts.append(
-            "Focus on strategic direction and final approval. "
-            "Review the complete plan and ensure alignment with goals."
-        )
-
-    prompt_parts.append(
-        "\n\nIMPORTANT: Your response must be in the following JSON format:\n"
-        "{\n"
-        '  "action_type": "<ACTION_TYPE>",\n'
-        '  "reasoning": "<Your thought process>",\n'
-        '  "content": "<Your work output>"\n'
-        "}\n\n"
-        "Available action types for your role: "
-        f"{', '.join(get_allowed_actions(agent_id))}"
-    )
-
-    return "\n".join(prompt_parts)
+# Agent prompts are now imported from AgentEnv.prompts module
+# Use prompts.get_agent_prompt(agent_id) to get the system prompt for each agent
 
 
 def build_user_prompt(
@@ -320,7 +255,7 @@ def get_model_message(
     Returns:
         Dictionary with action_type, reasoning, and content
     """
-    system_prompt = get_agent_system_prompt(agent_id)
+    system_prompt = get_agent_prompt(agent_id)
     user_prompt = build_user_prompt(step, agent_id, observation, task_description)
 
     try:

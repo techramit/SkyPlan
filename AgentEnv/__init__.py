@@ -23,6 +23,20 @@ from .models import (
     ValidationConfig,
     WorkflowConfig,
 )
+from .prompts import (
+    get_agent_prompt,
+    get_agent_role_description,
+    get_agent_quality_guidelines,
+    get_agent_collaboration_guidelines,
+    get_agent_common_pitfalls,
+    get_agent_examples,
+    get_maya_prompt,
+    get_elon_prompt,
+    get_jordan_prompt,
+    get_robert_prompt,
+    get_taylor_prompt,
+    get_sam_prompt,
+)
 from .reward import (
     CompletionBonusCalculator,
     ContentAnalyzer,
@@ -167,4 +181,17 @@ __all__ = [
     "SCORE_THRESHOLD_GOOD",
     "SCORE_THRESHOLD_POOR",
     "HANDOFF_QUALITY_THRESHOLD",
+    # Agent prompts
+    "get_agent_prompt",
+    "get_maya_prompt",
+    "get_elon_prompt",
+    "get_jordan_prompt",
+    "get_robert_prompt",
+    "get_taylor_prompt",
+    "get_sam_prompt",
+    "get_agent_role_description",
+    "get_agent_quality_guidelines",
+    "get_agent_collaboration_guidelines",
+    "get_agent_common_pitfalls",
+    "get_agent_examples",
 ]
