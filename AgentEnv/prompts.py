@@ -484,6 +484,28 @@ You will produce a VALIDATION document that includes:
 - Prioritize issues by severity (critical, major, minor)
 - Be constructive but firm on quality standards
 
+## CONSISTENCY_CHECKLIST (MANDATORY)
+
+You MUST check for these specific contradictions between documents:
+
+### PRD (Elon) vs TRD (Jordan) Consistency Checks:
+- [ ] Authentication methods match (e.g., if PRD says "OAuth", TRD must describe OAuth implementation)
+- [ ] Data models align with user stories (e.g., if PRD mentions "user profiles", TRD must define user profile schema)
+- [ ] API endpoints support all required features (e.g., if PRD lists "search", TRD must include search endpoints)
+- [ ] Security requirements are consistent (e.g., if PRD requires "2FA", TRD must implement 2FA)
+- [ ] Performance targets are achievable (e.g., if PRD promises "100ms response", TRD architecture must support it)
+- [ ] Mobile requirements are addressed (e.g., if PRD says "mobile-first", TRD must include mobile considerations)
+
+### Research (Maya) vs PRD (Elon) Consistency Checks:
+- [ ] Market claims are supported by research data
+- [ ] User personas align with research findings
+- [ ] Competitive analysis informs feature priorities
+
+### Roadmap (Robert) vs Architecture (Jordan) Consistency Checks:
+- [ ] Timeline is realistic given technical complexity
+- [ ] Resource requirements match architecture needs
+- [ ] Dependencies are properly identified
+
 ## Quality Standards
 
 - Reviews should be systematic and thorough
@@ -565,7 +587,7 @@ You will produce a STRATEGY document that includes:
 1. **Strategic Assessment**: Is this worth building? What's the market opportunity?
 2. **Resource Requirements**: What do we need to build this? (team, timeline, budget)
 3. **Risk Assessment**: What are the major risks and how do we mitigate them?
-4. **Go/No-Go Decision**: Should we proceed? Why or why not?
+4. **INVESTMENT DECISION (GO/NO-GO)**: Should we invest in this project? Why or why not?
 5. **Strategic Direction**: What are our priorities and next steps?
 
 ## Specific Instructions
@@ -573,10 +595,24 @@ You will produce a STRATEGY document that includes:
 - Review the complete plan holistically
 - Assess strategic fit and market opportunity
 - Evaluate resource requirements and feasibility
-- Make go/no-go decisions based on team output
+- **MAKE A CLEAR GO/NO-GO INVESTMENT DECISION** based on team output
 - Provide clear strategic direction and priorities
 - Consider competitive positioning and differentiation
 - Think about the 3-5 year horizon
+- **Your decision must be explicit: "GO" or "NO-GO" with clear justification**
+
+## INVESTMENT DECISION FRAMEWORK
+
+When making your go/no-go decision, consider:
+
+- **Market Opportunity**: Is there a real, validated market need?
+- **Competitive Advantage**: Do we have a defensible position?
+- **Technical Feasibility**: Can we actually build this with our resources?
+- **Team Alignment**: Are all agents aligned on the vision?
+- **Risk/Reward Ratio**: Is the potential reward worth the risk?
+- **Resource Efficiency**: Can we execute efficiently with the proposed team/timeline?
+
+**Your final output MUST include a clear investment recommendation.**
 
 ## Quality Standards
 
@@ -605,7 +641,17 @@ You will produce a STRATEGY document that includes:
 
 ### Good Strategy
 
-"Based on the team's combined output, the authentication system addresses a clear market need with a feasible technical approach. The team has identified 3 key differentiators: email-based reset, social login, and enterprise SSO. We should proceed with development with a phased approach starting with email-based reset. Resource requirements: 2 backend developers, 1 QA engineer. Timeline: 8 weeks to MVP, 12 weeks to full feature set."
+"**INVESTMENT DECISION: GO**
+
+Based on the team's combined output, the authentication system addresses a clear market need with a feasible technical approach. The team has identified 3 key differentiators: email-based reset, social login, and enterprise SSO. Market research shows 60% of users struggle with password reset flows, creating a significant opportunity.
+
+**Strategic Assessment**: This is a GO. The market opportunity is validated, technical approach is sound, and competitive differentiation is clear.
+
+**Resource Requirements**: 2 backend developers, 1 QA engineer. Timeline: 8 weeks to MVP, 12 weeks to full feature set.
+
+**Risk Mitigation**: Main risks are security vulnerabilities and user adoption. We'll mitigate with security audits and user testing.
+
+**Next Steps**: Proceed with Phase 1 development starting with email-based authentication."
 
 ### Bad Strategy
 

@@ -109,6 +109,29 @@ def log_step(
     )
 
 
+def log_reasoning(step: int, agent_id: str, reasoning: str) -> None:
+    """Log the agent's reasoning for judges to see.
+
+    Args:
+        step: Step number
+        agent_id: The agent ID
+        reasoning: The agent's reasoning
+    """
+    # Truncate reasoning if too long for display
+    max_reasoning_length = 200
+    if len(reasoning) > max_reasoning_length:
+        reasoning_display = reasoning[:max_reasoning_length] + "..."
+    else:
+        reasoning_display = reasoning
+
+    # Use ANSI colors for beautiful terminal output
+    agent_name = get_agent_name(agent_id)
+    print(
+        f"\033[94m[REASONING]\033[0m step={step} agent={agent_name} thinking=\"{reasoning_display}\"",
+        flush=True,
+    )
+
+
 def log_end(
     success: bool,
     steps: int,
@@ -164,11 +187,26 @@ def build_user_prompt(
         f"Task: {task_description}",
     ]
 
-    # Add information about previous work
+    # Add information about previous work with summarization for token optimization
     if observation.documents:
         context_parts.append("\nPrevious work produced:")
         for doc_type, doc in observation.documents.items():
-            context_parts.append(f"\n- {doc_type}: {doc.content[:200]}..." if len(doc.content) > 200 else f"\n- {doc_type}: {doc.content}")
+            # Summarize long documents to avoid context limits
+            if len(doc.content) > 500:
+                # Create a summary for long documents
+                lines = doc.content.split('\n')
+                summary_lines = []
+                # Keep first 3 lines (usually headers)
+                summary_lines.extend(lines[:3])
+                # Add a note about truncation
+                summary_lines.append(f"... [Document truncated: {len(doc.content)} chars total]")
+                # Keep last 2 lines (usually conclusions)
+                if len(lines) > 5:
+                    summary_lines.extend(lines[-2:])
+                truncated_content = '\n'.join(summary_lines)
+                context_parts.append(f"\n- {doc_type} (SUMMARY):\n{truncated_content}")
+            else:
+                context_parts.append(f"\n- {doc_type}: {doc.content}")
 
     # Add feedback if any
     if observation.feedback:
@@ -365,6 +403,9 @@ async def run_episode(
             observation,
             task_description,
         )
+
+        # Log reasoning for judges to see AI thinking
+        log_reasoning(step, agent_id, action_data.get("reasoning", ""))
 
         # Create action
         action = SkyPlanAction(
