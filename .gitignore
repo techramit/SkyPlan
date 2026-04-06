@@ -5,6 +5,8 @@
 
 # Private documentation
 Docs/PVT.md
+REFACTORING_SUMMARY.md
+AgentEnv\REWARD_README.md
 
 # Python
 __pycache__/
