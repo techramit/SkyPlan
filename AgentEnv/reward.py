@@ -21,8 +21,9 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import Enum
 from os import environ
-from typing import Literal
+from typing import Protocol, runtime_checkable
 
 from openai import OpenAI
 
@@ -31,10 +32,66 @@ from .models import (
     SkyPlanAction,
 )
 from .workflow import (
+    get_all_agent_ids,
     get_all_document_types,
     get_required_documents,
     get_workflow_entry,
 )
+
+
+# ============================================================================
+# Constants
+# ============================================================================
+
+# Default number of steps in a workflow (6 agents)
+DEFAULT_WORKFLOW_STEPS = 6
+
+# Score thresholds
+SCORE_THRESHOLD_EXCELLENT = 0.8
+SCORE_THRESHOLD_GOOD = 0.5
+SCORE_THRESHOLD_POOR = 0.3
+
+# Feedback thresholds
+FEEDBACK_THRESHOLD = 0.5
+HANDOFF_QUALITY_THRESHOLD = 0.8
+
+# Deduction values
+UNPROFESSIONAL_PATTERN_DEDUCTION = 0.1
+SENTENCE_STRUCTURE_BONUS = 0.1
+HANDOFF_ACKNOWLEDGMENT_BONUS = 0.1
+HANDOFF_SETUP_BONUS = 0.1
+CONTRADICTION_PENALTY_MULTIPLIER = 0.5
+
+
+# ============================================================================
+# Enums
+# ============================================================================
+
+
+class DifficultyLevel(str, Enum):
+    """Task difficulty levels."""
+
+    EASY = "easy"
+    MEDIUM = "medium"
+    HARD = "hard"
+
+
+class ReferenceLevel(str, Enum):
+    """Reference quality levels."""
+
+    NONE = "none"
+    GENERIC = "generic"
+    SPECIFIC = "specific"
+    INTEGRATED = "integrated"
+
+
+class PenaltyType(str, Enum):
+    """Types of penalties."""
+
+    LENGTH = "length"
+    STRUCTURE = "structure"
+    CONTENT = "content"
+    ROLE = "role"
 
 
 # ============================================================================
@@ -59,9 +116,9 @@ class RewardConfig:
     # Content Depth Thresholds per Difficulty
     CONTENT_DEPTH_THRESHOLDS: dict[str, tuple[int, int]] = field(
         default_factory=lambda: {
-            "easy": (100, 300),
-            "medium": (300, 800),
-            "hard": (800, 2000),
+            DifficultyLevel.EASY: (100, 300),
+            DifficultyLevel.MEDIUM: (300, 800),
+            DifficultyLevel.HARD: (800, 2000),
         }
     )
 
@@ -90,10 +147,14 @@ class RewardConfig:
 
     # Teamwork Bonus (0.0-0.2 per step)
     TEAMWORK_BONUS_MAX: float = 0.2
-    TEAMWORK_REFERENCE_LEVEL_0: float = 0.0
-    TEAMWORK_REFERENCE_LEVEL_1: float = 0.05
-    TEAMWORK_REFERENCE_LEVEL_2: float = 0.1
-    TEAMWORK_REFERENCE_LEVEL_3: float = 0.2
+    TEAMWORK_REFERENCE_LEVELS: dict[str, float] = field(
+        default_factory=lambda: {
+            ReferenceLevel.NONE: 0.0,
+            ReferenceLevel.GENERIC: 0.05,
+            ReferenceLevel.SPECIFIC: 0.1,
+            ReferenceLevel.INTEGRATED: 0.2,
+        }
+    )
     TEAMWORK_REFERENCE_THRESHOLD_LOW: float = 0.3
     TEAMWORK_REFERENCE_THRESHOLD_HIGH: float = 0.7
 
@@ -164,22 +225,25 @@ class RewardConfig:
     # Caching
     CACHE_TTL_HOURS: int = 24
 
+    # Workflow configuration
+    WORKFLOW_STEPS: int = DEFAULT_WORKFLOW_STEPS
+
     # Normalizer bounds (calculated from config)
     NORMALIZER_MIN_POSSIBLE: float = field(init=False)
     NORMALIZER_MAX_POSSIBLE: float = field(init=False)
 
     def __post_init__(self):
         """Calculate derived values after initialization."""
-        # Calculate normalizer bounds based on config
+        # Calculate normalizer bounds based on config and workflow steps
         # Worst case: all penalties, no bonuses
         self.NORMALIZER_MIN_POSSIBLE = (
-            self.PENALTY_MAX_PER_STEP * 6  # 6 steps max
+            self.PENALTY_MAX_PER_STEP * self.WORKFLOW_STEPS
         )
         # Best case: all bonuses, no penalties
         self.NORMALIZER_MAX_POSSIBLE = (
-            self.QUALITY_BONUS_MAX * 6  # 6 steps
-            + self.TEAMWORK_BONUS_MAX * 6  # 6 steps
-            + self.COMPLETION_BONUS  # Episode bonus
+            self.QUALITY_BONUS_MAX * self.WORKFLOW_STEPS
+            + self.TEAMWORK_BONUS_MAX * self.WORKFLOW_STEPS
+            + self.COMPLETION_BONUS
         )
 
     @classmethod
@@ -194,6 +258,7 @@ class RewardConfig:
             SKYPLAN_LLM_BASE_URL: LLM base URL
             SKYPLAN_LLM_MODEL: LLM model name
             SKYPLAN_CACHE_TTL_HOURS: Cache TTL in hours
+            SKYPLAN_WORKFLOW_STEPS: Number of workflow steps
         """
         config = cls()
 
@@ -212,6 +277,8 @@ class RewardConfig:
             config.LLM_TIMEOUT = int(environ["SKYPLAN_LLM_TIMEOUT"])
         if "SKYPLAN_CACHE_TTL_HOURS" in environ:
             config.CACHE_TTL_HOURS = int(environ["SKYPLAN_CACHE_TTL_HOURS"])
+        if "SKYPLAN_WORKFLOW_STEPS" in environ:
+            config.WORKFLOW_STEPS = int(environ["SKYPLAN_WORKFLOW_STEPS"])
 
         # Re-calculate derived values
         config.__post_init__()
@@ -222,8 +289,7 @@ class RewardConfig:
 # Global configuration instance
 reward_config = RewardConfig.from_env()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logger (module-level, not global)
 logger = logging.getLogger(__name__)
 
 
@@ -289,6 +355,103 @@ class EpisodeReward:
 
 
 # ============================================================================
+# Protocols
+# ============================================================================
+
+
+@runtime_checkable
+class ScoreCalculator(Protocol):
+    """Protocol for score calculators."""
+
+    def calculate(self, *args, **kwargs) -> float:
+        """Calculate a score."""
+        ...
+
+
+# ============================================================================
+# Shared Utilities
+# ============================================================================
+
+
+class ContentAnalyzer:
+    """Shared utilities for content analysis."""
+
+    @staticmethod
+    def has_headers(content: str) -> bool:
+        """Check if content has markdown headers.
+
+        Args:
+            content: Document content
+
+        Returns:
+            True if headers present
+        """
+        return "##" in content
+
+    @staticmethod
+    def has_lists(content: str) -> bool:
+        """Check if content has markdown lists.
+
+        Args:
+            content: Document content
+
+        Returns:
+            True if lists present
+        """
+        return "-" in content or "*" in content
+
+    @staticmethod
+    def count_paragraphs(content: str) -> int:
+        """Count number of paragraphs in content.
+
+        Args:
+            content: Document content
+
+        Returns:
+            Number of paragraphs
+        """
+        return content.count("\n\n")
+
+    @staticmethod
+    def has_keyword(content: str, keyword: str, case_sensitive: bool = False) -> bool:
+        """Check if content contains a keyword.
+
+        Args:
+            content: Document content
+            keyword: Keyword to search for
+            case_sensitive: Whether search is case-sensitive
+
+        Returns:
+            True if keyword found
+        """
+        if case_sensitive:
+            return keyword in content
+        return keyword.lower() in content.lower()
+
+    @staticmethod
+    def extract_words(content: str, min_length: int = 1) -> list[str]:
+        """Extract words from content.
+
+        Args:
+            content: Document content
+            min_length: Minimum word length
+
+        Returns:
+            List of words
+        """
+        words = []
+        for line in content.split("\n"):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            for word in line.split():
+                word = word.strip(".,;:!?()[]{}\"'").strip()
+                if len(word) >= min_length:
+                    words.append(word)
+        return words
+
+
+# ============================================================================
 # Cache
 # ============================================================================
 
@@ -301,7 +464,14 @@ class RewardCache:
         self._ttl = timedelta(hours=ttl_hours)
 
     def _hash_content(self, content: str) -> str:
-        """Create a hash of content for caching."""
+        """Create a hash of content for caching.
+
+        Args:
+            content: Content to hash
+
+        Returns:
+            SHA256 hash
+        """
         return hashlib.sha256(content.encode()).hexdigest()
 
     def get(self, content: str) -> QualityScore | None:
@@ -337,7 +507,11 @@ class RewardCache:
         self._cache.clear()
 
     def size(self) -> int:
-        """Get number of cached entries."""
+        """Get number of cached entries.
+
+        Returns:
+            Number of cached entries
+        """
         return len(self._cache)
 
 
@@ -358,8 +532,12 @@ class BaseCalculator(ABC):
 
     @abstractmethod
     def calculate(self, *args, **kwargs) -> float:
-        """Calculate the reward component."""
-        pass
+        """Calculate the reward component.
+
+        Returns:
+            Calculated score
+        """
+        ...
 
 
 # ============================================================================
@@ -380,10 +558,15 @@ class QualityBonusCalculator(BaseCalculator):
         self.use_llm = use_llm
         self.api_key = api_key
         self._llm_client: OpenAI | None = None
+        self._analyzer = ContentAnalyzer()
 
     @property
     def llm_client(self) -> OpenAI | None:
-        """Lazy initialization of LLM client."""
+        """Lazy initialization of LLM client.
+
+        Returns:
+            OpenAI client or None
+        """
         if self._llm_client is None and self.api_key and self.use_llm:
             self._llm_client = OpenAI(
                 api_key=self.api_key,
@@ -451,16 +634,10 @@ class QualityBonusCalculator(BaseCalculator):
         content = action.content.lower()
         keywords = task_keywords or []
 
-        # Content Depth (40%)
+        # Calculate individual scores
         content_depth = self._score_content_depth(action.content, task_difficulty)
-
-        # Structure (30%)
         structure = self._score_structure(action.content)
-
-        # Relevance (20%)
         relevance = self._score_relevance(content, keywords)
-
-        # Professionalism (10%)
         professionalism = self._score_professionalism(action.content)
 
         # Calculate weighted overall
@@ -500,7 +677,7 @@ class QualityBonusCalculator(BaseCalculator):
 
         # Get difficulty-based thresholds from config
         thresholds = self.config.CONTENT_DEPTH_THRESHOLDS
-        min_len, target_len = thresholds.get(difficulty, thresholds["medium"])
+        min_len, target_len = thresholds.get(difficulty, thresholds[DifficultyLevel.MEDIUM])
 
         if length < min_len:
             return 0.0
@@ -522,16 +699,16 @@ class QualityBonusCalculator(BaseCalculator):
         score = 0.0
         content_lower = content.lower()
 
-        # Has headers (## or ###)
-        if "##" in content:
+        # Has headers
+        if self._analyzer.has_headers(content):
             score += self.config.STRUCTURE_HAS_HEADERS_WEIGHT
 
-        # Has lists (- or *)
-        if "-" in content or "*" in content:
+        # Has lists
+        if self._analyzer.has_lists(content):
             score += self.config.STRUCTURE_HAS_LISTS_WEIGHT
 
         # Has multiple paragraphs
-        if content.count("\n\n") >= self.config.STRUCTURE_MIN_PARAGRAPHS:
+        if self._analyzer.count_paragraphs(content) >= self.config.STRUCTURE_MIN_PARAGRAPHS:
             score += self.config.STRUCTURE_HAS_PARAGRAPHS_WEIGHT
 
         # Has structural keywords
@@ -571,13 +748,13 @@ class QualityBonusCalculator(BaseCalculator):
         # Deductions for unprofessional elements
         for pattern in self.config.UNPROFESSIONAL_PATTERNS:
             if pattern in content_lower:
-                score -= 0.1
+                score -= UNPROFESSIONAL_PATTERN_DEDUCTION
 
         # Check for proper sentence structure
         sentences = content.split(".")
         if len(sentences) > 1:
             # Has multiple sentences
-            score += 0.1
+            score += SENTENCE_STRUCTURE_BONUS
 
         return max(0.0, min(score, 1.0))
 
@@ -601,13 +778,13 @@ class QualityBonusCalculator(BaseCalculator):
         """
         feedback = []
 
-        if content_depth < 0.5:
+        if content_depth < FEEDBACK_THRESHOLD:
             feedback.append("Content could be more detailed and substantive.")
-        if structure < 0.5:
+        if structure < FEEDBACK_THRESHOLD:
             feedback.append("Document structure could be improved with more headers and sections.")
-        if relevance < 0.5:
+        if relevance < FEEDBACK_THRESHOLD:
             feedback.append("Content could be more relevant to the task requirements.")
-        if professionalism < 0.5:
+        if professionalism < FEEDBACK_THRESHOLD:
             feedback.append("Writing could be more professional and clear.")
 
         if not feedback:
@@ -769,6 +946,7 @@ class TeamworkBonusCalculator(BaseCalculator):
     def __init__(self, config: RewardConfig | None = None):
         super().__init__(config)
         self._entity_cache: dict[str, set[str]] = {}
+        self._analyzer = ContentAnalyzer()
 
     def calculate(
         self,
@@ -840,32 +1018,31 @@ class TeamworkBonusCalculator(BaseCalculator):
             Reference score in [0.0, 0.2]
         """
         current_lower = current_content.lower()
-        previous_lower = previous_content.lower()
 
         # Extract key entities from previous document
         entities = self._extract_entities(previous_content, doc_type)
 
         if not entities:
             # No entities to reference
-            return 0.0
+            return self.config.TEAMWORK_REFERENCE_LEVELS[ReferenceLevel.NONE]
 
         # Check for references
-        referenced_count = 0
-        for entity in entities:
-            if entity.lower() in current_lower:
-                referenced_count += 1
+        referenced_count = sum(
+            1 for entity in entities
+            if entity.lower() in current_lower
+        )
 
         reference_ratio = referenced_count / len(entities)
 
         # Determine reference level using config thresholds
         if reference_ratio == 0:
-            return self.config.TEAMWORK_REFERENCE_LEVEL_0
+            return self.config.TEAMWORK_REFERENCE_LEVELS[ReferenceLevel.NONE]
         elif reference_ratio < self.config.TEAMWORK_REFERENCE_THRESHOLD_LOW:
-            return self.config.TEAMWORK_REFERENCE_LEVEL_1
+            return self.config.TEAMWORK_REFERENCE_LEVELS[ReferenceLevel.GENERIC]
         elif reference_ratio < self.config.TEAMWORK_REFERENCE_THRESHOLD_HIGH:
-            return self.config.TEAMWORK_REFERENCE_LEVEL_2
+            return self.config.TEAMWORK_REFERENCE_LEVELS[ReferenceLevel.SPECIFIC]
         else:
-            return self.config.TEAMWORK_REFERENCE_LEVEL_3
+            return self.config.TEAMWORK_REFERENCE_LEVELS[ReferenceLevel.INTEGRATED]
 
     def _extract_entities(self, content: str, doc_type: str) -> set[str]:
         """Extract key entities from document content.
@@ -883,33 +1060,20 @@ class TeamworkBonusCalculator(BaseCalculator):
             return self._entity_cache[cache_key]
 
         entities = set()
-        lines = content.split("\n")
+        words = self._analyzer.extract_words(
+            content,
+            min_length=self.config.ENTITY_MIN_WORD_LENGTH,
+        )
 
-        for line in lines:
-            line = line.strip()
-            # Skip empty lines and headers
-            if not line or line.startswith("#"):
-                continue
+        for word in words:
+            # Keep if it's a significant term
+            # A word is an entity if it meets ANY of these criteria
+            is_capitalized = word[0].isupper() if word else False
+            has_numbers = any(c.isdigit() for c in word)
+            has_percent = "%" in word
 
-            # Extract potential entities (words that look like important terms)
-            # Look for capitalized words, numbers, percentages, etc.
-            words = line.split()
-            for word in words:
-                # Clean up punctuation
-                word = word.strip(".,;:!?()[]{}\"'").strip()
-
-                # Keep if it's a significant term
-                # Fixed operator precedence: all conditions must be checked
-                # A word is an entity if it meets ANY of these criteria AND is long enough
-                is_capitalized = word[0].isupper() if word else False
-                has_numbers = any(c.isdigit() for c in word)
-                has_percent = "%" in word
-
-                if (
-                    len(word) > self.config.ENTITY_MIN_WORD_LENGTH
-                    and (is_capitalized or has_numbers or has_percent)
-                ):
-                    entities.add(word)
+            if is_capitalized or has_numbers or has_percent:
+                entities.add(word)
 
         self._entity_cache[cache_key] = entities
         return entities
@@ -938,14 +1102,14 @@ class TeamworkBonusCalculator(BaseCalculator):
 
         # Check if agent acknowledges previous work
         if any(phrase in content_lower for phrase in self.config.ACKNOWLEDGMENT_PHRASES):
-            score += 0.1
+            score += HANDOFF_ACKNOWLEDGMENT_BONUS
 
         # Check if agent sets up next agent
         next_agent_entry = get_workflow_entry(action.agent_id)
         if next_agent_entry and next_agent_entry.get("next_agent"):
             # Agent is not last, should set up next
             if any(phrase in content_lower for phrase in self.config.SETUP_PHRASES):
-                score += 0.1
+                score += HANDOFF_SETUP_BONUS
 
         return min(score, 1.0)
 
@@ -969,11 +1133,11 @@ class TeamworkBonusCalculator(BaseCalculator):
         for doc_type, score in references.items():
             if score == 0.0:
                 feedback.append(f"No reference to {doc_type} document.")
-            elif score < self.config.TEAMWORK_REFERENCE_LEVEL_2:
+            elif score < self.config.TEAMWORK_REFERENCE_LEVELS[ReferenceLevel.SPECIFIC]:
                 feedback.append(f"Could reference {doc_type} more specifically.")
 
         # Check handoff quality
-        if handoff_quality < 0.8:
+        if handoff_quality < HANDOFF_QUALITY_THRESHOLD:
             feedback.append("Could improve handoff to next agent.")
 
         if not feedback:
@@ -1028,6 +1192,10 @@ class CompletionBonusCalculator(BaseCalculator):
 class PenaltyCalculator(BaseCalculator):
     """Calculates penalties for constraint violations."""
 
+    def __init__(self, config: RewardConfig | None = None):
+        super().__init__(config)
+        self._analyzer = ContentAnalyzer()
+
     def calculate(
         self,
         action: SkyPlanAction,
@@ -1052,7 +1220,7 @@ class PenaltyCalculator(BaseCalculator):
         # Length penalties
         length_penalty = self._check_length_penalty(action.content)
         if length_penalty < 0:
-            penalties["length"] = length_penalty
+            penalties[PenaltyType.LENGTH] = length_penalty
             if length_penalty == self.config.PENALTY_EMPTY:
                 reasons.append("Empty content.")
             elif length_penalty == self.config.PENALTY_TOO_SHORT:
@@ -1061,10 +1229,10 @@ class PenaltyCalculator(BaseCalculator):
         # Structure penalties
         structure_penalty = self._check_structure_penalty(action.content)
         if structure_penalty < 0:
-            if "##" not in action.content:
+            if not self._analyzer.has_headers(action.content):
                 penalties["no_headers"] = self.config.PENALTY_NO_HEADERS
                 reasons.append("No headers in document.")
-            if not ("-" in action.content or "*" in action.content):
+            if not self._analyzer.has_lists(action.content):
                 penalties["no_lists"] = self.config.PENALTY_NO_LISTS
                 reasons.append("No lists or tables where expected.")
 
@@ -1090,7 +1258,7 @@ class PenaltyCalculator(BaseCalculator):
         # Role penalties
         role_penalty = self._check_role_penalty(action)
         if role_penalty < 0:
-            penalties["role"] = role_penalty
+            penalties[PenaltyType.ROLE] = role_penalty
             reasons.append("Action not aligned with agent role.")
 
         # Calculate total and cap
@@ -1132,11 +1300,11 @@ class PenaltyCalculator(BaseCalculator):
         penalty = 0.0
 
         # Check for headers
-        if "##" not in content:
+        if not self._analyzer.has_headers(content):
             penalty += self.config.PENALTY_NO_HEADERS
 
         # Check for lists
-        if not ("-" in content or "*" in content):
+        if not self._analyzer.has_lists(content):
             penalty += self.config.PENALTY_NO_LISTS
 
         return penalty
@@ -1217,7 +1385,7 @@ class PenaltyCalculator(BaseCalculator):
             if phrase in content_lower:
                 # Potential contradiction, but could be legitimate
                 # Just a small penalty for now
-                return self.config.PENALTY_CONTRADICTION * 0.5
+                return self.config.PENALTY_CONTRADICTION * CONTRADICTION_PENALTY_MULTIPLIER
 
         return 0.0
 
@@ -1463,11 +1631,19 @@ class RewardCalculator:
         self._previous_agent_id = None
 
     def get_step_count(self) -> int:
-        """Get the number of steps processed."""
+        """Get the number of steps processed.
+
+        Returns:
+            Number of steps processed
+        """
         return len(self._step_rewards)
 
     def get_current_total(self) -> float:
-        """Get the current total reward (before completion bonus)."""
+        """Get the current total reward (before completion bonus).
+
+        Returns:
+            Current total reward
+        """
         return sum(step.total for step in self._step_rewards)
 
 
@@ -1518,5 +1694,9 @@ def clear_reward_cache() -> None:
 
 
 def get_cache_size() -> int:
-    """Get the current cache size."""
+    """Get the current cache size.
+
+    Returns:
+        Number of cached entries
+    """
     return _reward_cache.size()

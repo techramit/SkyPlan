@@ -11,6 +11,7 @@ The SkyPlan environment is a multi-agent planning system where specialized agent
 collaborate to transform an idea into structured planning documents.
 """
 
+from datetime import datetime
 from enum import Enum
 from typing import Literal
 
@@ -22,32 +23,35 @@ from pydantic import BaseModel, Field, field_validator
 # Configuration Constants
 # ============================================================================
 
+
 class ValidationConfig:
-    """Configuration for action validation thresholds."""
-    MIN_CONTENT_LENGTH = 10
-    MIN_REASONING_LENGTH = 5
+    """Configuration for action validation thresholds.
 
+    Attributes:
+        MIN_CONTENT_LENGTH: Minimum content length for an action
+        MIN_REASONING_LENGTH: Minimum reasoning length for an action
+    """
 
-class RewardConfig:
-    """Configuration for reward calculation weights."""
-    BASE_REWARD = 0.1
-    CONTENT_LENGTH_WEIGHT = 0.3
-    CONTENT_LENGTH_TARGET = 1000
-    REASONING_WEIGHT = 0.2
-    REASONING_TARGET = 200
-    STRUCTURE_WEIGHT = 0.4
-    MAX_REWARD = 1.0
+    MIN_CONTENT_LENGTH: int = 10
+    MIN_REASONING_LENGTH: int = 5
 
 
 class WorkflowConfig:
-    """Configuration for workflow and phases."""
-    PHASES = ["research", "product", "architecture", "planning", "validation", "strategy"]
-    DEFAULT_TOTAL_STEPS = 10
+    """Configuration for workflow and phases.
+
+    Attributes:
+        PHASES: List of workflow phases
+        DEFAULT_TOTAL_STEPS: Default total steps in a workflow
+    """
+
+    PHASES: list[str] = ["research", "product", "architecture", "planning", "validation", "strategy"]
+    DEFAULT_TOTAL_STEPS: int = 10
 
 
 # ============================================================================
 # Action to Document Mapping
 # ============================================================================
+
 
 ACTION_TO_DOCUMENT: dict[str, str] = {
     # Maya (Research Analyst) - RESEARCH actions
@@ -93,6 +97,7 @@ ACTION_TO_DOCUMENT: dict[str, str] = {
 # Document Types
 # ============================================================================
 
+
 class DocumentType(str, Enum):
     """Enumeration of all document types in the SkyPlan system.
 
@@ -116,35 +121,193 @@ class DocumentType(str, Enum):
     VALIDATION = "VALIDATION"
     STRATEGY = "STRATEGY"
 
+    # Display names mapping
+    _DISPLAY_NAMES: dict[str, str] = {
+        RESEARCH: "Research Summary",
+        PRD: "Product Requirements Document",
+        TRD: "Technical Requirements Document",
+        ARCHITECTURE: "System Architecture",
+        ROADMAP: "Product Roadmap",
+        TASKS: "Task Breakdown",
+        VALIDATION: "Validation Report",
+        STRATEGY: "Strategic Direction",
+    }
+
+    # Filename mapping
+    _FILENAMES: dict[str, str] = {
+        RESEARCH: "RESEARCH.md",
+        PRD: "PRD.md",
+        TRD: "TRD.md",
+        ARCHITECTURE: "ARCHITECTURE.md",
+        ROADMAP: "ROADMAP.md",
+        TASKS: "TASKS.md",
+        VALIDATION: "VALIDATION.md",
+        STRATEGY: "STRATEGY.md",
+    }
+
     @classmethod
     def get_display_name(cls, doc_type: str) -> str:
-        """Get human-readable display name for a document type."""
-        names = {
-            cls.RESEARCH.value: "Research Summary",
-            cls.PRD.value: "Product Requirements Document",
-            cls.TRD.value: "Technical Requirements Document",
-            cls.ARCHITECTURE.value: "System Architecture",
-            cls.ROADMAP.value: "Product Roadmap",
-            cls.TASKS.value: "Task Breakdown",
-            cls.VALIDATION.value: "Validation Report",
-            cls.STRATEGY.value: "Strategic Direction",
-        }
-        return names.get(doc_type, doc_type)
+        """Get human-readable display name for a document type.
+
+        Args:
+            doc_type: The document type
+
+        Returns:
+            Human-readable display name
+        """
+        return cls._DISPLAY_NAMES.get(doc_type, doc_type)
 
     @classmethod
     def get_filename(cls, doc_type: str) -> str:
-        """Get the filename for a document type."""
-        filenames = {
-            cls.RESEARCH.value: "RESEARCH.md",
-            cls.PRD.value: "PRD.md",
-            cls.TRD.value: "TRD.md",
-            cls.ARCHITECTURE.value: "ARCHITECTURE.md",
-            cls.ROADMAP.value: "ROADMAP.md",
-            cls.TASKS.value: "TASKS.md",
-            cls.VALIDATION.value: "VALIDATION.md",
-            cls.STRATEGY.value: "STRATEGY.md",
-        }
-        return filenames.get(doc_type, f"{doc_type}.md")
+        """Get the filename for a document type.
+
+        Args:
+            doc_type: The document type
+
+        Returns:
+            Filename for the document
+        """
+        return cls._FILENAMES.get(doc_type, f"{doc_type}.md")
+
+
+# ============================================================================
+# Document Status
+# ============================================================================
+
+
+class DocumentStatus(str, Enum):
+    """Enumeration of document status values."""
+
+    DRAFT = "draft"
+    IN_REVIEW = "in_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+# ============================================================================
+# Feedback Types
+# ============================================================================
+
+
+class FeedbackType(str, Enum):
+    """Enumeration of feedback types in the SkyPlan system.
+
+    Each feedback type represents a different kind of peer review:
+    - SUGGESTION: Ideas for improvement
+    - CRITIQUE: Critical feedback on issues
+    - QUESTION: Clarification requests
+    - APPROVAL: Positive feedback or approval
+    - CONCERN: Risk or issue identification
+    - REQUEST_REVISION: Request for changes
+    """
+
+    SUGGESTION = "suggestion"
+    CRITIQUE = "critique"
+    QUESTION = "question"
+    APPROVAL = "approval"
+    CONCERN = "concern"
+    REQUEST_REVISION = "request_revision"
+
+    # Display names mapping
+    _DISPLAY_NAMES: dict[str, str] = {
+        SUGGESTION: "Suggestion",
+        CRITIQUE: "Critique",
+        QUESTION: "Question",
+        APPROVAL: "Approval",
+        CONCERN: "Concern",
+        REQUEST_REVISION: "Request for Revision",
+    }
+
+    @classmethod
+    def get_display_name(cls, feedback_type: str) -> str:
+        """Get human-readable display name for a feedback type.
+
+        Args:
+            feedback_type: The feedback type
+
+        Returns:
+            Human-readable display name
+        """
+        return cls._DISPLAY_NAMES.get(feedback_type, feedback_type)
+
+
+# ============================================================================
+# Action Result Types
+# ============================================================================
+
+
+class ActionResult(str, Enum):
+    """Enumeration of action result statuses in the SkyPlan system.
+
+    Each result status represents the outcome of a previous action:
+    - SUCCESS: The action completed successfully
+    - FAILURE: The action failed due to an error or issue
+    - PARTIAL: The action completed but with some issues or incomplete work
+    - REJECTED: The action was rejected (e.g., document validation failed)
+    - PENDING: The action is still being processed
+    """
+
+    SUCCESS = "success"
+    FAILURE = "failure"
+    PARTIAL = "partial"
+    REJECTED = "rejected"
+    PENDING = "pending"
+
+    # Display names mapping
+    _DISPLAY_NAMES: dict[str, str] = {
+        SUCCESS: "Success",
+        FAILURE: "Failure",
+        PARTIAL: "Partial",
+        REJECTED: "Rejected",
+        PENDING: "Pending",
+    }
+
+    # Successful outcomes
+    _SUCCESSFUL_OUTCOMES: set[str] = {SUCCESS, PARTIAL}
+
+    # Failure outcomes
+    _FAILURE_OUTCOMES: set[str] = {FAILURE, REJECTED}
+
+    @classmethod
+    def get_display_name(cls, result: str) -> str:
+        """Get human-readable display name for an action result.
+
+        Args:
+            result: The result status
+
+        Returns:
+            Human-readable display name
+        """
+        return cls._DISPLAY_NAMES.get(result, result)
+
+    @classmethod
+    def is_successful(cls, result: str) -> bool:
+        """Check if the result indicates a successful outcome.
+
+        Args:
+            result: The result status
+
+        Returns:
+            True if successful
+        """
+        return result in cls._SUCCESSFUL_OUTCOMES
+
+    @classmethod
+    def is_failure(cls, result: str) -> bool:
+        """Check if the result indicates a failed outcome.
+
+        Args:
+            result: The result status
+
+        Returns:
+            True if failed
+        """
+        return result in cls._FAILURE_OUTCOMES
+
+
+# ============================================================================
+# Document Model
+# ============================================================================
 
 
 class Document(BaseModel):
@@ -169,82 +332,48 @@ class Document(BaseModel):
         description="Current status of the document",
     )
 
+    @classmethod
+    def create(
+        cls,
+        doc_type: str,
+        content: str,
+        author: str,
+    ) -> "Document":
+        """Factory method to create a document with auto-generated timestamps.
+
+        Args:
+            doc_type: The type of document
+            content: The document content
+            author: The agent who created the document
+
+        Returns:
+            A new Document instance
+        """
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        return cls(
+            type=doc_type,
+            content=content,
+            author=author,
+            created_at=timestamp,
+            updated_at=timestamp,
+            status=DocumentStatus.DRAFT,
+        )
+
+    def update_content(self, content: str, author: str) -> None:
+        """Update the document content and metadata.
+
+        Args:
+            content: New content
+            author: Agent who made the update
+        """
+        self.content = content
+        self.author = author
+        self.updated_at = datetime.utcnow().isoformat() + "Z"
+
 
 # ============================================================================
-# Feedback Types
+# Feedback Model
 # ============================================================================
-
-class FeedbackType(str, Enum):
-    """Enumeration of feedback types in the SkyPlan system.
-
-    Each feedback type represents a different kind of peer review:
-    - SUGGESTION: Ideas for improvement
-    - CRITIQUE: Critical feedback on issues
-    - QUESTION: Clarification requests
-    - APPROVAL: Positive feedback or approval
-    - CONCERN: Risk or issue identification
-    - REQUEST_REVISION: Request for changes
-    """
-
-    SUGGESTION = "suggestion"
-    CRITIQUE = "critique"
-    QUESTION = "question"
-    APPROVAL = "approval"
-    CONCERN = "concern"
-    REQUEST_REVISION = "request_revision"
-
-    @classmethod
-    def get_display_name(cls, feedback_type: str) -> str:
-        """Get human-readable display name for a feedback type."""
-        names = {
-            cls.SUGGESTION.value: "Suggestion",
-            cls.CRITIQUE.value: "Critique",
-            cls.QUESTION.value: "Question",
-            cls.APPROVAL.value: "Approval",
-            cls.CONCERN.value: "Concern",
-            cls.REQUEST_REVISION.value: "Request for Revision",
-        }
-        return names.get(feedback_type, feedback_type)
-
-
-class ActionResult(str, Enum):
-    """Enumeration of action result statuses in the SkyPlan system.
-
-    Each result status represents the outcome of a previous action:
-    - SUCCESS: The action completed successfully
-    - FAILURE: The action failed due to an error or issue
-    - PARTIAL: The action completed but with some issues or incomplete work
-    - REJECTED: The action was rejected (e.g., document validation failed)
-    - PENDING: The action is still being processed
-    """
-
-    SUCCESS = "success"
-    FAILURE = "failure"
-    PARTIAL = "partial"
-    REJECTED = "rejected"
-    PENDING = "pending"
-
-    @classmethod
-    def get_display_name(cls, result: str) -> str:
-        """Get human-readable display name for an action result."""
-        names = {
-            cls.SUCCESS.value: "Success",
-            cls.FAILURE.value: "Failure",
-            cls.PARTIAL.value: "Partial",
-            cls.REJECTED.value: "Rejected",
-            cls.PENDING.value: "Pending",
-        }
-        return names.get(result, result)
-
-    @classmethod
-    def is_successful(cls, result: str) -> bool:
-        """Check if the result indicates a successful outcome."""
-        return result in [cls.SUCCESS.value, cls.PARTIAL.value]
-
-    @classmethod
-    def is_failure(cls, result: str) -> bool:
-        """Check if the result indicates a failed outcome."""
-        return result in [cls.FAILURE.value, cls.REJECTED.value]
 
 
 class Feedback(BaseModel):
@@ -301,20 +430,23 @@ class Feedback(BaseModel):
         Returns:
             A new Feedback instance
         """
-        from datetime import datetime
-
+        timestamp = datetime.utcnow().isoformat() + "Z"
         return cls(
             from_agent=from_agent,
             to_agent=to_agent,
             document_type=document_type,
             feedback_type=feedback_type,
             comment=comment,
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=timestamp,
             resolved=False,
         )
 
     def get_summary(self) -> str:
-        """Get a human-readable summary of this feedback."""
+        """Get a human-readable summary of this feedback.
+
+        Returns:
+            Formatted summary string
+        """
         from_name = AgentId.get_display_name(self.from_agent)
         type_name = FeedbackType.get_display_name(self.feedback_type)
 
@@ -323,6 +455,11 @@ class Feedback(BaseModel):
             parts.append(f"({self.document_type})")
         parts.append(self.comment)
         return " ".join(parts)
+
+
+# ============================================================================
+# Last Action Model
+# ============================================================================
 
 
 class LastAction(BaseModel):
@@ -371,26 +508,37 @@ class LastAction(BaseModel):
         Returns:
             A new LastAction instance
         """
-        from datetime import datetime
-
+        timestamp = datetime.utcnow().isoformat() + "Z"
         return cls(
             agent_id=agent_id,
             action_type=action_type,
             result=result,
             message=message,
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=timestamp,
         )
 
     def is_successful(self) -> bool:
-        """Check if the last action was successful."""
+        """Check if the last action was successful.
+
+        Returns:
+            True if successful
+        """
         return ActionResult.is_successful(self.result)
 
     def is_failure(self) -> bool:
-        """Check if the last action failed."""
+        """Check if the last action failed.
+
+        Returns:
+            True if failed
+        """
         return ActionResult.is_failure(self.result)
 
     def get_summary(self) -> str:
-        """Get a human-readable summary of the last action."""
+        """Get a human-readable summary of the last action.
+
+        Returns:
+            Formatted summary string
+        """
         agent_name = AgentId.get_display_name(self.agent_id)
         result_name = ActionResult.get_display_name(self.result)
         return f"{agent_name} performed {self.action_type}: {result_name} - {self.message}"
@@ -399,6 +547,7 @@ class LastAction(BaseModel):
 # ============================================================================
 # Agent Definitions
 # ============================================================================
+
 
 class AgentId(str, Enum):
     """Enumeration of all available agents in the SkyPlan system.
@@ -424,11 +573,21 @@ class AgentId(str, Enum):
     # Define the workflow order for agent progression
     WORKFLOW_ORDER = [MAYA, ELON, JORDAN, ROBERT, TAYLOR, SAM]
 
+    # Display names mapping
+    _DISPLAY_NAMES: dict[str, str] = {
+        MAYA: "Maya (Research Analyst)",
+        ELON: "Elon (Product Manager)",
+        JORDAN: "Jordan (Architect)",
+        ROBERT: "Robert (Execution Planner)",
+        TAYLOR: "Taylor (Validator)",
+        SAM: "Sam (CEO)",
+    }
+
     @classmethod
     def get_display_name(cls, agent_id: str) -> str:
         """Get human-readable display name for an agent ID.
 
-        This method now delegates to the workflow module for data-driven configuration.
+        This method delegates to the workflow module for data-driven configuration.
 
         Args:
             agent_id: The agent ID
@@ -441,21 +600,13 @@ class AgentId(str, Enum):
             return get_agent_name(agent_id)
         except ImportError:
             # Fallback to hardcoded values if workflow module is not available
-            names = {
-                cls.MAYA.value: "Maya (Research Analyst)",
-                cls.ELON.value: "Elon (Product Manager)",
-                cls.JORDAN.value: "Jordan (Architect)",
-                cls.ROBERT.value: "Robert (Execution Planner)",
-                cls.TAYLOR.value: "Taylor (Validator)",
-                cls.SAM.value: "Sam (CEO)",
-            }
-            return names.get(agent_id, agent_id)
+            return cls._DISPLAY_NAMES.get(agent_id, agent_id)
 
     @classmethod
     def get_next_agent(cls, current_agent: str) -> str:
         """Get the next agent in the workflow order.
 
-        This method now delegates to the workflow module for data-driven configuration.
+        This method delegates to the workflow module for data-driven configuration.
 
         Args:
             current_agent: The current agent ID
@@ -479,7 +630,7 @@ class AgentId(str, Enum):
     def get_workflow_position(cls, agent_id: str) -> int:
         """Get the position of an agent in the workflow (0-indexed).
 
-        This method now delegates to the workflow module for data-driven configuration.
+        This method delegates to the workflow module for data-driven configuration.
 
         Args:
             agent_id: The agent ID
@@ -496,6 +647,11 @@ class AgentId(str, Enum):
                 return cls.WORKFLOW_ORDER.index(cls(agent_id))
             except (ValueError, AttributeError):
                 return -1
+
+
+# ============================================================================
+# Action Type Definitions
+# ============================================================================
 
 
 class ActionType(str, Enum):
@@ -552,54 +708,63 @@ class ActionType(str, Enum):
     PRIORITIZE_OBJECTIVES = "PRIORITIZE_OBJECTIVES"
     REQUEST_REVISION = "REQUEST_REVISION"
 
+    # Action to category mapping
+    _ACTION_CATEGORIES: dict[str, str] = {
+        # RESEARCH category
+        SEARCH_MARKET: "RESEARCH",
+        ANALYZE_COMPETITORS: "RESEARCH",
+        VALIDATE_PROBLEM: "RESEARCH",
+        SUMMARIZE_INSIGHTS: "RESEARCH",
+        IDENTIFY_OPPORTUNITIES: "RESEARCH",
+        # PRODUCT category
+        WRITE_PRD: "PRODUCT",
+        DEFINE_FEATURES: "PRODUCT",
+        IDENTIFY_USER_PERSONA: "PRODUCT",
+        PRIORITIZE_FEATURES: "PRODUCT",
+        DEFINE_SUCCESS_METRICS: "PRODUCT",
+        # ARCHITECTURE category
+        DESIGN_ARCHITECTURE: "ARCHITECTURE",
+        SELECT_TECH_STACK: "ARCHITECTURE",
+        DEFINE_APIS: "ARCHITECTURE",
+        DESIGN_DATA_MODEL: "ARCHITECTURE",
+        WRITE_TRD: "ARCHITECTURE",
+        # PLANNING category
+        CREATE_ROADMAP: "PLANNING",
+        BREAK_INTO_TASKS: "PLANNING",
+        PLAN_SPRINTS: "PLANNING",
+        ESTIMATE_TIMELINES: "PLANNING",
+        DEFINE_DEPENDENCIES: "PLANNING",
+        # VALIDATION category
+        REVIEW_DOCUMENTS: "VALIDATION",
+        CHECK_CONSISTENCY: "VALIDATION",
+        VALIDATE_CLAIMS: "VALIDATION",
+        IDENTIFY_RISKS: "VALIDATION",
+        SCORE_PLAN: "VALIDATION",
+        # STRATEGY category
+        SET_DIRECTION: "STRATEGY",
+        REVIEW_PLAN: "STRATEGY",
+        APPROVE_STRATEGY: "STRATEGY",
+        PRIORITIZE_OBJECTIVES: "STRATEGY",
+        REQUEST_REVISION: "STRATEGY",
+    }
+
     @classmethod
     def get_category(cls, action_type: str) -> str:
-        """Get the category of an action type."""
-        categories = {
-            # RESEARCH category
-            cls.SEARCH_MARKET.value: "RESEARCH",
-            cls.ANALYZE_COMPETITORS.value: "RESEARCH",
-            cls.VALIDATE_PROBLEM.value: "RESEARCH",
-            cls.SUMMARIZE_INSIGHTS.value: "RESEARCH",
-            cls.IDENTIFY_OPPORTUNITIES.value: "RESEARCH",
-            # PRODUCT category
-            cls.WRITE_PRD.value: "PRODUCT",
-            cls.DEFINE_FEATURES.value: "PRODUCT",
-            cls.IDENTIFY_USER_PERSONA.value: "PRODUCT",
-            cls.PRIORITIZE_FEATURES.value: "PRODUCT",
-            cls.DEFINE_SUCCESS_METRICS.value: "PRODUCT",
-            # ARCHITECTURE category
-            cls.DESIGN_ARCHITECTURE.value: "ARCHITECTURE",
-            cls.SELECT_TECH_STACK.value: "ARCHITECTURE",
-            cls.DEFINE_APIS.value: "ARCHITECTURE",
-            cls.DESIGN_DATA_MODEL.value: "ARCHITECTURE",
-            cls.WRITE_TRD.value: "ARCHITECTURE",
-            # PLANNING category
-            cls.CREATE_ROADMAP.value: "PLANNING",
-            cls.BREAK_INTO_TASKS.value: "PLANNING",
-            cls.PLAN_SPRINTS.value: "PLANNING",
-            cls.ESTIMATE_TIMELINES.value: "PLANNING",
-            cls.DEFINE_DEPENDENCIES.value: "PLANNING",
-            # VALIDATION category
-            cls.REVIEW_DOCUMENTS.value: "VALIDATION",
-            cls.CHECK_CONSISTENCY.value: "VALIDATION",
-            cls.VALIDATE_CLAIMS.value: "VALIDATION",
-            cls.IDENTIFY_RISKS.value: "VALIDATION",
-            cls.SCORE_PLAN.value: "VALIDATION",
-            # STRATEGY category
-            cls.SET_DIRECTION.value: "STRATEGY",
-            cls.REVIEW_PLAN.value: "STRATEGY",
-            cls.APPROVE_STRATEGY.value: "STRATEGY",
-            cls.PRIORITIZE_OBJECTIVES.value: "STRATEGY",
-            cls.REQUEST_REVISION.value: "STRATEGY",
-        }
-        return categories.get(action_type, "UNKNOWN")
+        """Get the category of an action type.
+
+        Args:
+            action_type: The action type
+
+        Returns:
+            The category name
+        """
+        return cls._ACTION_CATEGORIES.get(action_type, "UNKNOWN")
 
     @classmethod
     def get_allowed_actions_for_agent(cls, agent_id: str) -> list[str]:
         """Get the list of actions that a specific agent can perform.
 
-        This method now delegates to the workflow module for data-driven configuration.
+        This method delegates to the workflow module for data-driven configuration.
 
         Args:
             agent_id: The agent ID
@@ -663,6 +828,7 @@ class ActionType(str, Enum):
 # Action and Observation Models
 # ============================================================================
 
+
 class SkyPlanAction(Action):
     """Action for the SkyPlan environment.
 
@@ -701,7 +867,18 @@ class SkyPlanAction(Action):
     @field_validator("action_type")
     @classmethod
     def validate_action_type_for_agent(cls, v: str, info) -> str:
-        """Validate that the action_type is allowed for the specified agent_id."""
+        """Validate that the action_type is allowed for the specified agent_id.
+
+        Args:
+            v: The action type value
+            info: Validation info containing the agent_id
+
+        Returns:
+            The validated action type
+
+        Raises:
+            ValueError: If action_type is not allowed for the agent
+        """
         agent_id = info.data.get("agent_id")
         if agent_id:
             allowed_actions = ActionType.get_allowed_actions_for_agent(agent_id)
