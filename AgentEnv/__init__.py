@@ -8,6 +8,20 @@
 
 from .client import AgentenvEnv
 from .models import AgentId, SkyPlanAction, SkyPlanObservation
+from .reward import (
+    EpisodeReward,
+    PenaltyScore,
+    QualityScore,
+    RewardCalculator,
+    RewardConfig,
+    ScoreNormalizer,
+    StepReward,
+    TeamworkBonusCalculator,
+    TeamworkScore,
+    calculate_reward,
+    clear_reward_cache,
+    get_cache_size,
+)
 from .tasks import (
     AGENT_DOCUMENTS,
     BaseGrader,
@@ -80,4 +94,17 @@ __all__ = [
     "get_agent_checklist",
     "calculate_composite_score",
     "calculate_agent_criteria_score",
+    # Reward system
+    "RewardCalculator",
+    "RewardConfig",
+    "StepReward",
+    "EpisodeReward",
+    "QualityScore",
+    "TeamworkScore",
+    "PenaltyScore",
+    "ScoreNormalizer",
+    "TeamworkBonusCalculator",
+    "calculate_reward",
+    "clear_reward_cache",
+    "get_cache_size",
 ]

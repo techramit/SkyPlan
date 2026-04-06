@@ -30,6 +30,7 @@ try:
         ValidationConfig,
         WorkflowConfig,
     )
+    from ..reward import RewardCalculator, StepReward
     from ..workflow import (
         get_first_agent,
         get_handoff_message,
@@ -48,6 +49,7 @@ except ImportError:
         ValidationConfig,
         WorkflowConfig,
     )
+    from reward import RewardCalculator, StepReward
     from workflow import (
         get_first_agent,
         get_handoff_message,
@@ -75,11 +77,18 @@ class SkyPlanEnvironment(Environment):
     # projects to run simultaneously.
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
 
-    def __init__(self, total_steps: int = WorkflowConfig.DEFAULT_TOTAL_STEPS):
+    def __init__(
+        self,
+        total_steps: int = WorkflowConfig.DEFAULT_TOTAL_STEPS,
+        use_llm_reward: bool = True,
+        llm_api_key: str | None = None,
+    ):
         """Initialize the SkyPlan environment with isolated state.
 
         Args:
             total_steps: Total number of steps for the planning workflow
+            use_llm_reward: Whether to use LLM for quality assessment
+            llm_api_key: API key for LLM reward service
         """
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._current_agent = get_first_agent()
@@ -91,9 +100,32 @@ class SkyPlanEnvironment(Environment):
         self._task_description = ""
         self._done = False
 
-    def reset(self) -> SkyPlanObservation:
+        # Initialize reward calculator
+        self._reward_calculator = RewardCalculator(
+            use_llm=use_llm_reward,
+            api_key=llm_api_key,
+        )
+
+        # Task configuration (can be set via reset)
+        self._task_keywords: list[str] = []
+        self._task_difficulty: str = "medium"
+        self._required_sections: list[str] = []
+
+    def reset(
+        self,
+        task_description: str = "Create a comprehensive planning document for the given idea.",
+        task_keywords: list[str] | None = None,
+        task_difficulty: str = "medium",
+        required_sections: list[str] | None = None,
+    ) -> SkyPlanObservation:
         """
         Reset the environment for a new episode.
+
+        Args:
+            task_description: The task description/goal
+            task_keywords: Required keywords for the task
+            task_difficulty: Task difficulty level (easy, medium, hard)
+            required_sections: Required sections for documents
 
         Returns:
             SkyPlanObservation with initial state, ready for the first agent to start
@@ -104,8 +136,16 @@ class SkyPlanEnvironment(Environment):
         self._documents = {}
         self._feedback = []
         self._last_action_result = None
-        self._task_description = "Create a comprehensive planning document for the given idea."
+        self._task_description = task_description
         self._done = False
+
+        # Set task configuration
+        self._task_keywords = task_keywords or []
+        self._task_difficulty = task_difficulty
+        self._required_sections = required_sections or []
+
+        # Reset reward calculator
+        self._reward_calculator.reset()
 
         return self._build_observation(
             result="Environment reset. Ready to begin planning.",
@@ -151,8 +191,15 @@ class SkyPlanEnvironment(Environment):
         # 3. The Filing: Save document to Shared Folder
         self._file_document(action)
 
-        # 4. The Performance Review: Calculate reward based on quality
-        reward = self._calculate_reward(action)
+        # 4. The Performance Review: Calculate reward using the new reward system
+        step_reward = self._reward_calculator.calculate_step_reward(
+            action=action,
+            documents=self._documents,
+            task_keywords=self._task_keywords,
+            task_difficulty=self._task_difficulty,
+            required_sections=self._required_sections,
+        )
+        reward = step_reward.total
 
         # 5. The Next Person: Move to next agent
         next_agent = get_next_agent(self._current_agent)
@@ -195,6 +242,27 @@ class SkyPlanEnvironment(Environment):
             Current State with episode_id and step_count
         """
         return self._state
+
+    def get_episode_reward(self) -> dict:
+        """
+        Get the final episode reward including completion bonus.
+
+        This should be called after the episode is done.
+
+        Returns:
+            Dictionary with final_score, breakdown, and details
+        """
+        episode_reward = self._reward_calculator.calculate_episode_reward(
+            documents=self._documents,
+        )
+
+        return {
+            "final_score": episode_reward.final_score,
+            "total_raw": episode_reward.total_raw,
+            "completion_bonus": episode_reward.completion_bonus,
+            "breakdown": episode_reward.breakdown,
+            "step_count": len(episode_reward.step_rewards),
+        }
 
     # ==========================================================================
     # Private Methods - Internal Implementation
