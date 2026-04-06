@@ -28,6 +28,9 @@ from openai import OpenAI
 # Add AgentEnv to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "AgentEnv"))
 
+# Import prompts directly to avoid openenv dependency
+import prompts as agent_prompts
+
 from AgentEnv import (
     AgentId,
     SkyPlanAction,
@@ -41,7 +44,6 @@ from AgentEnv import (
     get_task_summary,
 )
 from AgentEnv.client import AgentenvEnv
-from AgentEnv.prompts import get_agent_prompt
 from AgentEnv.reward import RewardCalculator
 
 
@@ -132,8 +134,8 @@ def log_end(
 # Agent System Prompts
 # ============================================================================
 
-# Agent prompts are now imported from AgentEnv.prompts module
-# Use prompts.get_agent_prompt(agent_id) to get the system prompt for each agent
+# Agent prompts are imported directly from prompts module to avoid openenv dependency
+# Use agent_prompts.get_agent_prompt(agent_id) to get the system prompt for each agent
 
 
 def build_user_prompt(
@@ -255,7 +257,7 @@ def get_model_message(
     Returns:
         Dictionary with action_type, reasoning, and content
     """
-    system_prompt = get_agent_prompt(agent_id)
+    system_prompt = agent_prompts.get_agent_prompt(agent_id)
     user_prompt = build_user_prompt(step, agent_id, observation, task_description)
 
     try:
