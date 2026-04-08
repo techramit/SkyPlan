@@ -238,6 +238,23 @@ class RewardConfig:
     # Workflow configuration
     WORKFLOW_STEPS: int = DEFAULT_WORKFLOW_STEPS
 
+    # Feedback Generation Rewards
+    FEEDBACK_GENERATION_BONUS: bool = True
+    COLLABORATIVE_FEEDBACK_BONUS: float = 0.02
+    VALIDATOR_FEEDBACK_BONUS: float = 0.08
+    STRATEGIC_FEEDBACK_BONUS: float = 0.10
+
+    # Feedback Resolution Rewards
+    FEEDBACK_RESOLUTION_BONUS: bool = True
+    PRIMARY_FEEDBACK_RESOLUTION_BONUS: float = 0.15
+    PEER_FEEDBACK_RESOLUTION_BONUS: float = 0.05
+
+    # Document Approval Rewards
+    DOCUMENT_APPROVAL_BONUS: bool = True
+    TAYLOR_APPROVAL_BONUS: float = 0.15
+    SAM_APPROVAL_BONUS: float = 0.15
+    FINAL_APPROVAL_BONUS: float = 0.50
+
     # Normalizer bounds (calculated from config)
     NORMALIZER_MIN_POSSIBLE: float = field(init=False)
     NORMALIZER_MAX_POSSIBLE: float = field(init=False)
@@ -1556,7 +1573,11 @@ class RewardCalculator:
         task_keywords: list[str] | None = None,
         task_difficulty: str = "medium",
         required_sections: list[str] | None = None,
+        feedback_generated: list | None = None,
+        feedback_resolved: list | None = None,
+        new_approvals: list | None = None,
     ) -> StepReward:
+        """Calculate reward for a single step."""
         """Calculate reward for a single step.
 
         Args:
@@ -1565,6 +1586,9 @@ class RewardCalculator:
             task_keywords: Required keywords for the task
             task_difficulty: Task difficulty level
             required_sections: Required sections for the document
+            feedback_generated: List of feedback items generated this step
+            feedback_resolved: List of feedback items resolved this step
+            new_approvals: List of (document_type, approver_agent) tuples for approvals
 
         Returns:
             StepReward with detailed breakdown
@@ -1600,7 +1624,9 @@ class RewardCalculator:
         approval_bonus = self._calculate_approval_bonus(action, documents)
         
         # Sum all reward components
-        total = quality_bonus + teamwork_bonus + penalty + approval_bonus
+        total = quality_bonus + teamwork_bonus + penalty + approval_bonus + feedback_generation_reward + feedback_resolution_reward + document_approval_reward
+
+        # Calculate feedback generation reward if feedback was generated\n        feedback_generation_reward = 0.0\n        if feedback_generated:\n            feedback_generation_reward = self.calculate_feedback_generation_reward(feedback_generated)\n\n        # Calculate feedback resolution reward if feedback was resolved\n        feedback_resolution_reward = 0.0\n        if feedback_resolved:\n            feedback_resolution_reward = self.calculate_feedback_resolution_reward(feedback_resolved)\n\n        # Calculate document approval reward if new approvals occurred\n        document_approval_reward = 0.0\n        if new_approvals:\n            document_approval_reward = self.calculate_document_approval_reward(new_approvals)
 
         # Create step reward
         step_reward = StepReward(
@@ -1611,6 +1637,10 @@ class RewardCalculator:
             quality_score=quality_score,
             teamwork_score=teamwork_score,
             penalty_score=penalty_score,
+
+		feedback_generation_reward=feedback_generation_reward,
+		feedback_resolution_reward=feedback_resolution_reward,
+		document_approval_reward=document_approval_reward
         )
 
         # Track for episode
@@ -1618,6 +1648,71 @@ class RewardCalculator:
         self._previous_agent_id = action.agent_id
 
         return step_reward
+
+    def calculate_feedback_generation_reward(self, feedback_list: list) -> float:
+        """Calculate reward for feedback generation.
+
+        Args:
+            feedback_list: List of feedback generated this step
+
+        Returns:
+            Total reward for feedback generation
+        """
+        if not self.config.FEEDBACK_GENERATION_BONUS or not feedback_list:
+            return 0.0
+
+        total_reward = 0.0
+        for feedback in feedback_list:
+            if feedback.from_agent == "sam":
+                total_reward += self.config.STRATEGIC_FEEDBACK_BONUS
+            elif feedback.from_agent == "taylor":
+                total_reward += self.config.VALIDATOR_FEEDBACK_BONUS
+            else:
+                total_reward += self.config.COLLABORATIVE_FEEDBACK_BONUS
+
+        return total_reward
+
+    def calculate_feedback_resolution_reward(self, resolved_feedback: list) -> float:
+        """Calculate reward for resolving feedback.
+
+        Args:
+            resolved_feedback: List of feedback items resolved this step
+
+        Returns:
+            Total reward for feedback resolution
+        """
+        if not self.config.FEEDBACK_RESOLUTION_BONUS or not resolved_feedback:
+            return 0.0
+
+        total_reward = 0.0
+        for feedback in resolved_feedback:
+            if feedback.from_agent in ["taylor", "sam"]:
+                total_reward += self.config.PRIMARY_FEEDBACK_RESOLUTION_BONUS
+            else:
+                total_reward += self.config.PEER_FEEDBACK_RESOLUTION_BONUS
+
+        return total_reward
+
+    def calculate_document_approval_reward(self, new_approvals: list) -> float:
+        """Calculate reward for document approvals.
+
+        Args:
+            new_approvals: List of (document_type, approver_agent) tuples
+
+        Returns:
+            Total reward for document approvals
+        """
+        if not self.config.DOCUMENT_APPROVAL_BONUS or not new_approvals:
+            return 0.0
+
+        total_reward = 0.0
+        for doc_type, approver in new_approvals:
+            if approver == "taylor":
+                total_reward += self.config.TAYLOR_APPROVAL_BONUS
+            elif approver == "sam":
+                total_reward += self.config.SAM_APPROVAL_BONUS
+
+        return total_reward
 
     def calculate_episode_reward(
         self,
