@@ -8,13 +8,13 @@ Product planning is a real workflow teams perform before implementation. SkyPlan
 
 ## Action and observation space
 
-Actions are represented by `SkyPlanAction` in [models.py](/AgentEnv/models.py). Each action includes:
+Actions are represented by `SkyPlanAction` in [models.py](AgentEnv/models.py). Each action includes:
 - `agent_id`: one of `maya`, `elon`, `jordan`, `robert`, `taylor`, `sam`
 - `action_type`: a role-valid action such as `SEARCH_MARKET`, `WRITE_PRD`, or `APPROVE_STRATEGY`
 - `reasoning`: the agent's rationale
 - `content`: the document content or review output
 
-Observations are represented by `SkyPlanObservation` in [models.py](/AgentEnv/models.py). Agents receive:
+Observations are represented by `SkyPlanObservation` in [models.py](AgentEnv/models.py). Agents receive:
 - task description and current phase
 - shared planning documents with statuses
 - feedback history and unresolved feedback
@@ -24,7 +24,7 @@ Observations are represented by `SkyPlanObservation` in [models.py](/AgentEnv/mo
 
 ## Workflow
 
-The workflow order is defined in [workflow.py](/AgentEnv/workflow.py):
+The workflow order is defined in [workflow.py](AgentEnv/workflow.py):
 1. Maya researches the market and problem space.
 2. Elon writes the PRD.
 3. Jordan produces the TRD and architecture.
@@ -36,7 +36,7 @@ Documents move through `draft -> in_review -> approved/rejected`, and feedback c
 
 ## Tasks
 
-The benchmark ships with three graded tasks in [tasks.py](/AgentEnv/tasks.py):
+The benchmark ships with three graded tasks in [tasks.py](AgentEnv/tasks.py):
 - `easy_user_authentication`: simple authentication planning
 - `medium_chat_app`: real-time chat application planning
 - `hard_saas_platform`: multi-tenant SaaS platform planning
@@ -74,12 +74,23 @@ By default, `inference.py` runs all three tasks and emits the required `[START]`
 
 ## Testing
 
-Feedback integration and end-to-end workflow coverage live in [test_feedback_integration.py](/test_feedback_integration.py).
+Feedback integration, grading checks, and inference-contract coverage live in:
+- [test_feedback_integration.py](test_feedback_integration.py)
+- [test_grading_quality.py](test_grading_quality.py)
+- [test_inference_contract.py](test_inference_contract.py)
 
 ```bash
-uv run --project AgentEnv pytest test_feedback_integration.py -q
+uv run --project AgentEnv pytest test_feedback_integration.py test_grading_quality.py test_inference_contract.py -q
 ```
 
-## Baseline note
+## Baseline scores
 
-The baseline runner is reproducible through [inference.py](/inference.py), but model-dependent scores are not checked into the repo because they depend on the configured remote model and token. Use the command above to record the current baseline for your chosen `MODEL_NAME`.
+Current deterministic local smoke-policy scores (`use_llm_reward=False`, one task-aligned workflow pass):
+
+| Task | Final Score |
+| --- | --- |
+| `easy_user_authentication` | `0.7214` |
+| `medium_chat_app` | `0.7214` |
+| `hard_saas_platform` | `0.6878` |
+
+The token-backed inference baseline is reproducible through [inference.py](inference.py). Re-run it with `HF_TOKEN` to record model-specific baseline scores for your chosen `MODEL_NAME`.

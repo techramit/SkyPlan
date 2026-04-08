@@ -12,7 +12,7 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import Document, Feedback, LastAction, SkyPlanAction, SkyPlanObservation
+from .models import Document, Feedback, LastAction, SkyPlanAction, SkyPlanObservation, WorkflowConfig
 from .workflow import get_first_agent
 
 
@@ -89,7 +89,7 @@ class AgentenvEnv(
             reasoning=obs_data.get("reasoning", ""),
             current_agent=obs_data.get("current_agent", get_first_agent()),
             step_number=obs_data.get("step_number", 1),
-            total_steps=obs_data.get("total_steps", 10),
+            total_steps=obs_data.get("total_steps", WorkflowConfig.DEFAULT_TOTAL_STEPS),
             documents=documents,
             feedback=feedback,
             last_action_result=last_action,

@@ -18,6 +18,11 @@ from typing import Literal
 
 from openai import OpenAI
 
+from .content_utils import (
+    count_markdown_headers,
+    extract_phase_labels,
+    keyword_coverage_ratio,
+)
 from .models import Document
 
 
@@ -186,7 +191,9 @@ class BaseGrader(ABC):
             return 0.0
 
         structure_count = sum(
-            1 for doc in documents.values() if doc.content.count("##") >= min_headers
+            1
+            for doc in documents.values()
+            if count_markdown_headers(doc.content) >= min_headers
         )
         return structure_count / len(documents)
 
@@ -204,12 +211,11 @@ class BaseGrader(ABC):
         if not documents or not keywords:
             return 0.0
 
-        relevance_count = sum(
-            1
+        coverage_scores = [
+            keyword_coverage_ratio(doc.content, keywords)
             for doc in documents.values()
-            if any(keyword.lower() in doc.content.lower() for keyword in keywords)
-        )
-        return relevance_count / len(documents)
+        ]
+        return sum(coverage_scores) / len(coverage_scores)
 
     @staticmethod
     def check_completeness(documents: dict[str, Document], required_docs: list[str]) -> float:
@@ -405,11 +411,16 @@ def _check_tasks_vs_roadmap_consistency(documents: dict[str, Document]) -> float
 
     task_score = sum(1 for t in task_mentions if t in tasks)
     phase_score = sum(1 for p in phase_mentions if p in roadmap)
+    roadmap_labels = extract_phase_labels(roadmap)
+    task_labels = extract_phase_labels(tasks)
 
-    # Tasks should reference roadmap phases
-    if task_score > 0 and phase_score > 0:
-        return 1.0
-    return 0.5
+    if roadmap_labels:
+        return len(roadmap_labels & task_labels) / len(roadmap_labels)
+
+    if task_score == 0 or phase_score == 0:
+        return 0.0
+
+    return min(task_score, phase_score) / max(task_score + phase_score, 1)
 
 
 def _check_research_prd_consistency(documents: dict[str, Document]) -> float:

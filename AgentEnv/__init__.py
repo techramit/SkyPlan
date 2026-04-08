@@ -45,6 +45,7 @@ from .reward import (
     EpisodeReward,
     HANDOFF_QUALITY_THRESHOLD,
     PenaltyCalculator,
+    PenaltyScore,
     PenaltyType,
     QualityBonusCalculator,
     QualityScore,

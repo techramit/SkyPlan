@@ -6,8 +6,16 @@ from types import SimpleNamespace
 import pytest
 
 from AgentEnv.client import AgentenvEnv
-from AgentEnv.models import Document, Feedback, LastAction, SkyPlanAction
-from AgentEnv.reward import RewardCalculator
+from AgentEnv.models import ActionType, Document, Feedback, LastAction, SkyPlanAction, WorkflowConfig
+from AgentEnv.reward import (
+    QualityBonusCalculator,
+    QualityScore,
+    RewardCache,
+    RewardCalculator,
+    RewardConfig,
+    ScoreNormalizer,
+    clear_reward_cache,
+)
 from AgentEnv.tasks import TASKS
 
 
@@ -74,6 +82,66 @@ def _short_workflow_content(label: str, task_name: str) -> str:
     return f"# {label}\n{task_name} notes"
 
 
+def _rich_document_content(label: str) -> str:
+    """Generate structured content that should clear deterministic quality checks."""
+
+    return (
+        f"# {label}\n\n"
+        "## Overview\n"
+        f"The {label.lower()} artifact captures detailed requirements, risks, dependencies, "
+        "acceptance criteria, and execution guidance for the planning workflow.\n\n"
+        "## Details\n"
+        "- Requirement coverage\n"
+        "- Dependency mapping\n"
+        "- Risk mitigation\n\n"
+        "The document is intentionally long enough to satisfy validation expectations and "
+        "support downstream approvals with clear structure."
+    )
+
+
+def _workflow_cycle_actions(content_factory) -> list[tuple[str, str, str]]:
+    """Build the canonical six-agent workflow action list for environment tests."""
+
+    labels = [
+        ("maya", "SEARCH_MARKET", "Research"),
+        ("elon", "WRITE_PRD", "PRD"),
+        ("jordan", "WRITE_TRD", "TRD"),
+        ("robert", "BREAK_INTO_TASKS", "Tasks"),
+        ("taylor", "REVIEW_DOCUMENTS", "Validation"),
+        ("sam", "APPROVE_STRATEGY", "Strategy"),
+    ]
+    return [
+        (agent_id, action_type, content_factory(label))
+        for agent_id, action_type, label in labels
+    ]
+
+
+def _task_aligned_document_content(label: str, task) -> str:
+    """Generate high-signal content that satisfies task keywords and required sections."""
+
+    keyword_block = ", ".join(task.required_keywords) if task.required_keywords else "planning"
+    sections = task.required_sections or ["overview", "details", "risks"]
+    section_blocks = "\n\n".join(
+        [
+            f"## {section}\n"
+            f"The {label.lower()} document covers {section} with explicit references to {keyword_block}."
+            for section in sections
+        ]
+    )
+
+    return (
+        f"# {label}\n\n"
+        "## Overview\n"
+        f"The {label.lower()} artifact is tailored for {task.name} and addresses {keyword_block}.\n\n"
+        f"{section_blocks}\n\n"
+        "## Execution Notes\n"
+        "- Dependencies are explicit.\n"
+        "- Risks and mitigations are documented.\n"
+        "- Handoffs are prepared for downstream agents.\n\n"
+        "This document is intentionally comprehensive enough to satisfy deterministic validation."
+    )
+
+
 def test_generate_collaborative_feedback_for_low_quality_action(make_env):
     """Low-quality action output should generate collaborative feedback."""
 
@@ -125,6 +193,36 @@ def test_generate_validation_feedback_updates_statuses_and_targets_authors(make_
     assert env._documents["VALIDATION"].status == "in_review"
 
 
+def test_validation_approval_tracking_credits_the_reviewer(make_env):
+    """Approval tuples should attribute approvals to Taylor, not the original author."""
+
+    env = make_env()
+    env._documents = {
+        "RESEARCH": _make_document("RESEARCH", "maya", _rich_document_content("Research")),
+        "PRD": _make_document("PRD", "elon", _rich_document_content("PRD")),
+        "TRD": _make_document("TRD", "jordan", _rich_document_content("TRD")),
+        "ARCHITECTURE": _make_document("ARCHITECTURE", "jordan", _rich_document_content("Architecture")),
+        "ROADMAP": _make_document("ROADMAP", "robert", _rich_document_content("Roadmap")),
+        "TASKS": _make_document("TASKS", "robert", _rich_document_content("Tasks")),
+        "VALIDATION": _make_document("VALIDATION", "taylor", _rich_document_content("Validation")),
+    }
+    env._reset_step_tracking()
+
+    env._generate_validation_feedback("taylor")
+
+    assert env._new_approvals_this_step
+    assert {approver for _, approver in env._new_approvals_this_step} == {"taylor"}
+    assert {doc_type for doc_type, _ in env._new_approvals_this_step} == {
+        "RESEARCH",
+        "PRD",
+        "TRD",
+        "ARCHITECTURE",
+        "ROADMAP",
+        "TASKS",
+        "VALIDATION",
+    }
+
+
 def test_generate_strategic_feedback_flags_missing_docs_and_approval_gaps(
     make_env,
     monkeypatch,
@@ -160,6 +258,107 @@ def test_generate_strategic_feedback_flags_missing_docs_and_approval_gaps(
         for feedback in feedback_list
     )
     assert env._documents["STRATEGY"].status == "rejected"
+
+
+def test_reset_metadata_reflects_the_real_workflow_length(make_env):
+    """Reset observations should describe the six-agent workflow, not a stale fixed length."""
+
+    env = make_env()
+    observation = env.reset()
+
+    assert observation.step_number == 1
+    assert observation.total_steps == WorkflowConfig.DEFAULT_TOTAL_STEPS
+    assert observation.current_state["phase"] == "research"
+
+
+def test_taylor_revision_feedback_reopens_the_workflow(make_env):
+    """Taylor blocking review should loop back to the earliest impacted author instead of ending."""
+
+    env = make_env()
+    env.reset(task_description="Plan auth")
+
+    for agent_id, action_type, content in _workflow_cycle_actions(
+        lambda label: _short_workflow_content(label, "auth")
+    )[:4]:
+        observation = env.step(_make_action(agent_id=agent_id, action_type=action_type, content=content))
+        assert observation.done is False
+
+    observation = env.step(
+        _make_action(
+            agent_id="taylor",
+            action_type="REVIEW_DOCUMENTS",
+            content=_short_workflow_content("Validation", "auth"),
+        )
+    )
+
+    assert observation.done is False
+    assert observation.current_agent == "maya"
+    assert observation.current_state["status"] == "revision_requested"
+    assert observation.total_steps > WorkflowConfig.DEFAULT_TOTAL_STEPS
+
+
+def test_sam_request_revision_routes_back_to_validation_when_docs_are_approved(make_env):
+    """A CEO revision request should reopen the workflow instead of terminating the episode."""
+
+    env = make_env()
+    task = TASKS["easy_user_authentication"]
+    env.reset(
+        task_description=task.description,
+        task_keywords=task.required_keywords,
+        task_difficulty=task.difficulty,
+        required_sections=task.required_sections,
+        task_id="easy_user_authentication",
+    )
+
+    for agent_id, action_type, content in _workflow_cycle_actions(
+        lambda label: _task_aligned_document_content(label, task)
+    )[:5]:
+        observation = env.step(_make_action(agent_id=agent_id, action_type=action_type, content=content))
+        assert observation.done is False
+
+    observation = env.step(
+        _make_action(
+            agent_id="sam",
+            action_type="REQUEST_REVISION",
+            content=_task_aligned_document_content("Strategy", task),
+        )
+    )
+
+    assert observation.done is False
+    assert observation.current_agent == "taylor"
+    assert observation.current_state["status"] == "revision_requested"
+    assert observation.documents["STRATEGY"].status == "rejected"
+
+
+def test_upstream_revisions_invalidate_downstream_artifacts(make_env):
+    """Changing an upstream document should mark downstream artifacts for regeneration."""
+
+    env = make_env()
+    env._documents = {
+        "PRD": _make_document("PRD", "elon", _rich_document_content("PRD"), status="approved"),
+        "TRD": _make_document("TRD", "jordan", _rich_document_content("TRD"), status="approved"),
+        "ARCHITECTURE": _make_document("ARCHITECTURE", "jordan", _rich_document_content("Architecture"), status="approved"),
+        "ROADMAP": _make_document("ROADMAP", "robert", _rich_document_content("Roadmap"), status="approved"),
+        "TASKS": _make_document("TASKS", "robert", _rich_document_content("Tasks"), status="approved"),
+        "VALIDATION": _make_document("VALIDATION", "taylor", _rich_document_content("Validation"), status="approved"),
+        "STRATEGY": _make_document("STRATEGY", "sam", _rich_document_content("Strategy"), status="approved"),
+    }
+
+    env._file_document(
+        _make_action(
+            agent_id="elon",
+            action_type="WRITE_PRD",
+            content=_rich_document_content("PRD revision"),
+        )
+    )
+
+    assert env._documents["PRD"].status == "draft"
+    assert env._documents["TRD"].status == "draft"
+    assert env._documents["ARCHITECTURE"].status == "draft"
+    assert env._documents["ROADMAP"].status == "draft"
+    assert env._documents["TASKS"].status == "draft"
+    assert env._documents["VALIDATION"].status == "draft"
+    assert env._documents["STRATEGY"].status == "draft"
 
 
 def test_process_feedback_resolutions_marks_matching_feedback_as_resolved(make_env):
@@ -276,6 +475,27 @@ def test_model_summary_helpers_return_human_readable_strings():
     assert "Success - Research completed" in last_action.get_summary()
 
 
+def test_public_package_exports_resolve_cleanly():
+    """Wildcard-friendly package exports should map to real symbols."""
+
+    package = import_module("AgentEnv")
+    missing = [name for name in package.__all__ if not hasattr(package, name)]
+
+    assert missing == []
+
+
+def test_models_module_exports_and_action_category_helper_are_runtime_safe():
+    """models.__all__ and ActionType helpers should stay valid at runtime."""
+
+    models_module = import_module("AgentEnv.models")
+    missing = [name for name in models_module.__all__ if not hasattr(models_module, name)]
+
+    assert missing == []
+    assert ActionType.get_category("WRITE_PRD") == "PRODUCT"
+    assert ActionType.get_category("SEARCH_MARKET") == "RESEARCH"
+    assert ActionType.get_category("NOT_A_REAL_ACTION") == "UNKNOWN"
+
+
 def test_reward_calculator_clamps_step_reward_but_keeps_raw_total():
     """Per-step rewards should stay judge-safe without losing raw reward math."""
 
@@ -301,6 +521,83 @@ def test_reward_calculator_clamps_step_reward_but_keeps_raw_total():
     assert step_reward.raw_total < 0.0
 
 
+def test_reward_normalizer_accounts_for_feedback_and_approval_ceiling():
+    """Final-score normalization should leave headroom above the legacy ceiling."""
+
+    config = RewardConfig()
+    legacy_max = (
+        config.QUALITY_BONUS_MAX * config.WORKFLOW_STEPS
+        + config.TEAMWORK_BONUS_MAX * config.WORKFLOW_STEPS
+        + config.COMPLETION_BONUS
+    )
+    normalizer = ScoreNormalizer(config=config)
+
+    assert config.NORMALIZER_MAX_POSSIBLE > legacy_max
+    assert normalizer.normalize(legacy_max + 0.25) < 1.0
+
+
+def test_reward_cache_scopes_scores_by_task_context(monkeypatch):
+    """LLM-score caching should not bleed across different task contexts."""
+
+    clear_reward_cache()
+    calculator = QualityBonusCalculator(use_llm=True, api_key="test-key")
+    calculator._llm_client = object()  # Force the LLM path without a real client.
+    action = _make_action(
+        agent_id="elon",
+        action_type="WRITE_PRD",
+        content=_rich_document_content("PRD"),
+    )
+    calls: list[str] = []
+
+    def fake_llm_quality_score(action, documents, task_keywords, task_difficulty):
+        del action, documents, task_keywords
+        calls.append(task_difficulty)
+        overall = 0.25 if task_difficulty == "easy" else 0.85
+        return QualityScore(
+            overall=overall,
+            content_depth=overall,
+            structure=overall,
+            relevance=overall,
+            professionalism=overall,
+            feedback=[],
+            llm_used=True,
+        )
+
+    monkeypatch.setattr(calculator, "_llm_quality_score", fake_llm_quality_score)
+
+    easy_score = calculator.calculate(action, {}, ["auth"], "easy")
+    hard_score = calculator.calculate(action, {}, ["auth"], "hard")
+
+    assert easy_score.overall == 0.25
+    assert hard_score.overall == 0.85
+    assert calls == ["easy", "hard"]
+    clear_reward_cache()
+
+
+def test_reward_cache_evicts_oldest_entries_when_capacity_is_exceeded():
+    """The shared reward cache should stay bounded under many unique documents."""
+
+    cache = RewardCache(ttl_hours=24, max_entries=2)
+    score = QualityScore(
+        overall=0.5,
+        content_depth=0.5,
+        structure=0.5,
+        relevance=0.5,
+        professionalism=0.5,
+        feedback=[],
+        llm_used=False,
+    )
+
+    cache.set("doc-a", "scope-a", score)
+    cache.set("doc-b", "scope-b", score)
+    cache.set("doc-c", "scope-c", score)
+
+    assert cache.size() == 2
+    assert cache.get("doc-a", "scope-a") is None
+    assert cache.get("doc-b", "scope-b") is not None
+    assert cache.get("doc-c", "scope-c") is not None
+
+
 @pytest.mark.parametrize("task_id", sorted(TASKS))
 def test_complete_workflow_generates_feedback_for_all_tasks(make_env, task_id):
     """Run the full six-agent workflow and verify feedback integration end to end."""
@@ -315,21 +612,16 @@ def test_complete_workflow_generates_feedback_for_all_tasks(make_env, task_id):
         task_id=task_id,
     )
 
-    workflow_actions = [
-        ("maya", "SEARCH_MARKET", "Research"),
-        ("elon", "WRITE_PRD", "PRD"),
-        ("jordan", "WRITE_TRD", "TRD"),
-        ("robert", "BREAK_INTO_TASKS", "Tasks"),
-        ("taylor", "REVIEW_DOCUMENTS", "Validation"),
-        ("sam", "APPROVE_STRATEGY", "Strategy"),
-    ]
+    workflow_actions = _workflow_cycle_actions(
+        lambda label: _task_aligned_document_content(label, task)
+    )
 
-    for step_index, (agent_id, action_type, label) in enumerate(workflow_actions, start=1):
+    for step_index, (agent_id, action_type, content) in enumerate(workflow_actions, start=1):
         observation = env.step(
             _make_action(
                 agent_id=agent_id,
                 action_type=action_type,
-                content=_short_workflow_content(label, task.name),
+                content=content,
             )
         )
         assert observation.errors == []
