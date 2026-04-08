@@ -351,6 +351,8 @@ class RewardConfig:
             config.TEAMWORK_BONUS_MAX = float(environ["SKYPLAN_TEAMWORK_BONUS_MAX"])
         if "SKYPLAN_COMPLETION_BONUS" in environ:
             config.COMPLETION_BONUS = float(environ["SKYPLAN_COMPLETION_BONUS"])
+        if "SKYPLAN_LLM_API_KEY" in environ:
+            config.LLM_API_KEY = environ["SKYPLAN_LLM_API_KEY"]
         if "SKYPLAN_LLM_BASE_URL" in environ:
             config.LLM_BASE_URL = environ["SKYPLAN_LLM_BASE_URL"]
         if "SKYPLAN_LLM_MODEL" in environ:
@@ -427,6 +429,7 @@ class StepReward:
     quality_score: QualityScore | None = None
     teamwork_score: TeamworkScore | None = None
     penalty_score: PenaltyScore | None = None
+    llm_error_penalty: float = 0.0
 
 
 @dataclass
@@ -1680,6 +1683,7 @@ class RewardCalculator:
         feedback_generated: list | None = None,
         feedback_resolved: list | None = None,
         new_approvals: list | None = None,
+        llm_error: bool = False,  # New parameter to indicate LLM error
     ) -> StepReward:
         """Calculate reward for a single step.
 
@@ -1692,6 +1696,7 @@ class RewardCalculator:
             feedback_generated: List of feedback items generated this step
             feedback_resolved: List of feedback items resolved this step
             new_approvals: List of (document_type, approver_agent) tuples for approvals
+            llm_error: Whether an LLM error occurred during this step
 
         Returns:
             StepReward with detailed breakdown
@@ -1732,6 +1737,10 @@ class RewardCalculator:
         document_approval_reward = self.calculate_document_approval_reward(
             new_approvals or []
         )
+
+        # Apply LLM error penalty
+        llm_error_penalty = -0.1 if llm_error else 0.0
+
         raw_total = (
             quality_bonus
             + teamwork_bonus
@@ -1740,6 +1749,7 @@ class RewardCalculator:
             + feedback_generation_reward
             + feedback_resolution_reward
             + document_approval_reward
+            + llm_error_penalty
         )
         total = self._clamp_step_reward(raw_total)
 
@@ -1756,6 +1766,7 @@ class RewardCalculator:
             quality_score=quality_score,
             teamwork_score=teamwork_score,
             penalty_score=penalty_score,
+            llm_error_penalty=llm_error_penalty,  # Include LLM error penalty in the reward breakdown
         )
 
         # Track for episode
