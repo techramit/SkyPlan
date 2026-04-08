@@ -1,164 +1,70 @@
-#!/usr/env python3
+#!/usr/bin/env python3
 """
-SkyPlan Inference Script
+SkyPlan inference runner.
 
-This script runs the SkyPlan environment with LLM-powered agents.
-It manages the complete workflow from start to finish, emitting standardized
-output for hackathon evaluation.
-
-Environment Variables:
-    API_BASE_URL: The API endpoint for the LLM
-    MODEL_NAME: The model identifier to use for inference
-    HF_TOKEN: Your Hugging Face / API key
-    IMAGE_NAME: The name of the local image to use (if using docker)
-    SKYPLAN_TASK: Task to run (easy_user_authentication, medium_chat_app, hard_saas_platform)
-    SKYPLAN_MAX_STEPS: Maximum steps per episode (default: 6)
-    SKYPLAN_TEMPERATURE: LLM temperature (default: 0.0)
-    SKYPLAN_MAX_TOKENS: Max tokens per LLM call (default: 2000)
+This script executes the SkyPlan environment with LLM-driven agents and emits
+the hackathon-required stdout format for each task episode.
 """
 
 import asyncio
 import json
 import os
 import sys
-from typing import Optional
+from typing import Any
 
 from openai import OpenAI
 
-# Add AgentEnv to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "AgentEnv"))
 
-# Import prompts directly to avoid openenv dependency
 import prompts as agent_prompts
 
-from AgentEnv import (
-    AgentId,
-    SkyPlanAction,
-    SkyPlanObservation,
-    get_all_agent_ids,
-    get_allowed_actions,
-    get_agent_name,
-    get_next_agent,
-    get_workflow_entry,
-    TASKS,
-    get_task_summary,
-)
+from AgentEnv import SkyPlanAction, SkyPlanObservation, TASKS, get_all_agent_ids, get_allowed_actions, get_agent_name
 from AgentEnv.client import AgentenvEnv
-from AgentEnv.reward import RewardCalculator
 
 
-# ============================================================================
-# Configuration
-# ============================================================================
-
-# Environment variables with defaults
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 IMAGE_NAME = os.getenv("IMAGE_NAME", "AgentEnv-env:latest")
 
-# Task configuration
-TASK_NAME = os.getenv("SKYPLAN_TASK", "easy_user_authentication")
-MAX_STEPS = int(os.getenv("SKYPLAN_MAX_STEPS", "6"))
+TASK_SELECTOR = os.getenv("SKYPLAN_TASK", "all").strip()
 TEMPERATURE = float(os.getenv("SKYPLAN_TEMPERATURE", "0.0"))
 MAX_TOKENS = int(os.getenv("SKYPLAN_MAX_TOKENS", "2000"))
-
-# Success threshold
 SUCCESS_SCORE_THRESHOLD = 0.5
-
-# Benchmark name
 BENCHMARK = "skyplan"
-
-# ============================================================================
-# Logging Functions
-# ============================================================================
 
 
 def log_start(task: str, env: str, model: str) -> None:
-    """Log the start of an episode.
+    """Emit the start line required by the judges."""
 
-    Args:
-        task: Task name
-        env: Environment/benchmark name
-        model: Model name
-    """
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(
-    step: int,
-    action: str,
-    reward: float,
-    done: bool,
-    error: Optional[str] = None,
-) -> None:
-    """Log a step in the episode.
+def log_step(step: int, action: str, reward: float, done: bool, error: str | None = None) -> None:
+    """Emit a step line in the exact required format."""
 
-    Args:
-        step: Step number
-        action: Action string representation
-        reward: Reward value
-        done: Whether episode is done
-        error: Error message or None
-    """
-    error_val = error if error else "null"
-    done_val = str(done).lower()
+    error_value = error if error else "null"
     print(
-        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        f"[STEP] step={step} action={action} reward={reward:.2f} "
+        f"done={str(done).lower()} error={error_value}",
         flush=True,
     )
 
 
-def log_reasoning(step: int, agent_id: str, reasoning: str) -> None:
-    """Log the agent's reasoning for judges to see.
+def log_end(success: bool, steps: int, rewards: list[float]) -> None:
+    """Emit the episode end line in the exact required format."""
 
-    Args:
-        step: Step number
-        agent_id: The agent ID
-        reasoning: The agent's reasoning
-    """
-    # Truncate reasoning if too long for display
-    max_reasoning_length = 200
-    if len(reasoning) > max_reasoning_length:
-        reasoning_display = reasoning[:max_reasoning_length] + "..."
-    else:
-        reasoning_display = reasoning
-
-    # Use ANSI colors for beautiful terminal output
-    agent_name = get_agent_name(agent_id)
+    rewards_str = ",".join(f"{reward:.2f}" for reward in rewards)
     print(
-        f"\033[94m[REASONING]\033[0m step={step} agent={agent_name} thinking=\"{reasoning_display}\"",
+        f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}",
         flush=True,
     )
 
 
-def log_end(
-    success: bool,
-    steps: int,
-    score: float,
-    rewards: list[float],
-) -> None:
-    """Log the end of an episode.
+def log_error(message: str) -> None:
+    """Send non-protocol errors to stderr so stdout stays judge-compliant."""
 
-    Args:
-        success: Whether the episode was successful
-        steps: Number of steps taken
-        score: Final score
-        rewards: List of all rewards
-    """
-    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(
-        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
-        flush=True,
-    )
-
-
-# ============================================================================
-# Agent System Prompts
-# ============================================================================
-
-# Agent prompts are imported directly from prompts module to avoid openenv dependency
-# Use agent_prompts.get_agent_prompt(agent_id) to get the system prompt for each agent
+    print(message, file=sys.stderr, flush=True)
 
 
 def build_user_prompt(
@@ -167,112 +73,85 @@ def build_user_prompt(
     observation: SkyPlanObservation,
     task_description: str,
 ) -> str:
-    """Build the user prompt for an agent.
+    """Build a compact user prompt for the acting agent."""
 
-    Args:
-        step: Current step number
-        agent_id: The agent ID
-        observation: Current observation from environment
-        task_description: The task description
-
-    Returns:
-        User prompt for the agent
-    """
-    agent_name = get_agent_name(agent_id)
-
-    # Build context from observation
     context_parts = [
         f"Step: {step} of {observation.total_steps}",
-        f"Your role: {agent_name}",
+        f"Your role: {get_agent_name(agent_id)}",
         f"Task: {task_description}",
     ]
 
-    # Add information about previous work with summarization for token optimization
     if observation.documents:
-        context_parts.append("\nPrevious work produced:")
-        for doc_type, doc in observation.documents.items():
-            # Summarize long documents to avoid context limits
-            if len(doc.content) > 500:
-                # Create a summary for long documents
-                lines = doc.content.split('\n')
-                summary_lines = []
-                # Keep first 3 lines (usually headers)
-                summary_lines.extend(lines[:3])
-                # Add a note about truncation
-                summary_lines.append(f"... [Document truncated: {len(doc.content)} chars total]")
-                # Keep last 2 lines (usually conclusions)
-                if len(lines) > 5:
-                    summary_lines.extend(lines[-2:])
-                truncated_content = '\n'.join(summary_lines)
-                context_parts.append(f"\n- {doc_type} (SUMMARY):\n{truncated_content}")
-            else:
-                context_parts.append(f"\n- {doc_type}: {doc.content}")
+        context_parts.append("\nExisting planning artifacts:")
+        for doc_type, document in observation.documents.items():
+            preview = document.content.strip()
+            if len(preview) > 500:
+                preview = preview[:500] + "\n... [truncated]"
+            context_parts.append(f"\n- {doc_type} ({document.status}):\n{preview}")
 
-    # Add feedback if any
-    if observation.feedback:
-        context_parts.append("\nFeedback from previous agents:")
-        for feedback in observation.feedback[-3:]:  # Last 3 feedback entries
-            context_parts.append(f"\n- {feedback.from_agent}: {feedback.comment}")
+    unresolved_feedback = [item for item in observation.feedback if not item.resolved]
+    if unresolved_feedback:
+        context_parts.append("\nOutstanding feedback to consider:")
+        for feedback in unresolved_feedback[-5:]:
+            target = feedback.to_agent or "team"
+            context_parts.append(
+                f"\n- from={feedback.from_agent} to={target} doc={feedback.document_type or 'general'}: "
+                f"{feedback.comment}"
+            )
 
-    # Add last action result if available
+    if observation.document_status_summary:
+        context_parts.append(
+            "\nDocument status summary: "
+            + ", ".join(
+                f"{status}={count}"
+                for status, count in observation.document_status_summary.items()
+            )
+        )
+
+    if observation.documents_awaiting_review:
+        context_parts.append(
+            "\nDocuments awaiting review: " + ", ".join(observation.documents_awaiting_review)
+        )
+
     if observation.last_action_result:
         context_parts.append(
             f"\nLast action result: {observation.last_action_result.get_summary()}"
         )
 
-    # Add current state
     if observation.current_state:
-        context_parts.append(f"\nCurrent phase: {observation.current_state.get('phase', 'unknown')}")
+        context_parts.append(
+            f"\nCurrent phase: {observation.current_state.get('phase', 'unknown')}"
+        )
 
-    context_parts.append("\n\nYour task: Complete your assigned work and produce the required document.")
-
+    context_parts.append(
+        "\nRespond as JSON with keys action_type, reasoning, and content. "
+        "Your content should advance the workflow and directly address any unresolved feedback relevant to your role."
+    )
     return "\n".join(context_parts)
 
 
-def parse_agent_response(response: str, agent_id: str) -> dict:
-    """Parse the agent's LLM response into action components.
+def parse_agent_response(response: str, agent_id: str) -> dict[str, str]:
+    """Parse the model response into a valid action payload."""
 
-    Args:
-        response: The LLM response text
-        agent_id: The agent ID
+    allowed_actions = get_allowed_actions(agent_id)
+    default_action = allowed_actions[0] if allowed_actions else "UNKNOWN"
 
-    Returns:
-        Dictionary with action_type, reasoning, and content
-    """
     try:
-        # Try to parse as JSON
         data = json.loads(response)
-
-        # Validate required fields
-        if "action_type" not in data:
-            raise ValueError("Missing action_type in response")
-
-        # Set defaults for optional fields
-        data.setdefault("reasoning", "")
-        data.setdefault("content", "")
-
-        # Validate action_type is allowed
-        allowed_actions = get_allowed_actions(agent_id)
-        if data["action_type"] not in allowed_actions:
-            # Try to find closest match
-            for action in allowed_actions:
-                if action.lower() in data["action_type"].lower():
-                    data["action_type"] = action
-                    break
-            else:
-                raise ValueError(f"Invalid action_type: {data['action_type']}")
-
-        return data
-    except json.JSONDecodeError:
-        # Fallback: treat entire response as content
-        # Try to infer action_type from content
-        content = response.strip()
-        action_type = get_allowed_actions(agent_id)[0] if get_allowed_actions(agent_id) else "UNKNOWN"
+        action_type = str(data.get("action_type", default_action))
+        if action_type not in allowed_actions:
+            action_type = default_action
 
         return {
             "action_type": action_type,
-            "reasoning": "Generated from free-form response",
-            "content": content,
+            "reasoning": str(data.get("reasoning", "")).strip() or "Providing the next workflow deliverable.",
+            "content": str(data.get("content", "")).strip(),
+        }
+    except json.JSONDecodeError:
+        return {
+            "action_type": default_action,
+            "reasoning": "Providing the next workflow deliverable based on the available context.",
+            "content": response.strip(),
         }
 
 
@@ -282,19 +161,9 @@ def get_model_message(
     agent_id: str,
     observation: SkyPlanObservation,
     task_description: str,
-) -> dict:
-    """Get the model's response for the current step.
+) -> dict[str, str]:
+    """Get the current agent's action proposal from the model."""
 
-    Args:
-        client: OpenAI client
-        step: Current step number
-        agent_id: The agent ID
-        observation: Current observation
-        task_description: Task description
-
-    Returns:
-        Dictionary with action_type, reasoning, and content
-    """
     system_prompt = agent_prompts.get_agent_prompt(agent_id)
     user_prompt = build_user_prompt(step, agent_id, observation, task_description)
 
@@ -312,204 +181,159 @@ def get_model_message(
         response_text = completion.choices[0].message.content or ""
         return parse_agent_response(response_text, agent_id)
     except Exception as exc:
-        print(f"[DEBUG] Model request failed: {exc}", flush=True)
-        # Fallback response
+        log_error(f"[model-error] {agent_id}: {exc}")
         return {
             "action_type": get_allowed_actions(agent_id)[0],
-            "reasoning": "Model request failed, using default",
-            "content": "Default content due to error",
+            "reasoning": "Falling back to a safe default action because the model request failed.",
+            "content": f"# {get_agent_name(agent_id)} Output\nProvide the next planning artifact for: {task_description}",
         }
 
 
-def format_action_string(action: dict) -> str:
-    """Format an action dictionary as a string for logging.
+def format_action_string(action: dict[str, str]) -> str:
+    """Format an action for the step log line."""
 
-    Args:
-        action: Action dictionary
-
-    Returns:
-        Formatted action string
-    """
     return f"{action.get('agent_id', 'unknown')}:{action.get('action_type', 'UNKNOWN')}"
-
-
-# ============================================================================
-# Main Inference Loop
-# ============================================================================
 
 
 async def run_episode(
     client: OpenAI,
-    env,
+    env: AgentenvEnv,
     task_id: str,
-    task_config: dict,
-) -> dict:
-    """Run a single episode for a task.
+    task_config: Any,
+) -> dict[str, Any]:
+    """Run a single task episode end to end."""
 
-    Args:
-        client: OpenAI client
-        env: Environment instance
-        task_id: Task ID
-        task_config: Task configuration
-
-    Returns:
-        Dictionary with success, steps, score, rewards
-    """
-    task_description = task_config.get("description", "")
-    task_keywords = task_config.get("required_keywords", [])
-    task_difficulty = task_config.get("difficulty", "medium")
-    required_sections = task_config.get("required_sections", [])
-
-    # Initialize tracking
     rewards: list[float] = []
     steps_taken = 0
-    score = 0.0
-    success = False
-    last_error = None
-    documents: dict = {}  # Accumulate documents for final scoring
+    observation: SkyPlanObservation | None = None
 
-    # Reset environment with task configuration
     try:
-        result = await env.reset(
-            task_description=task_description,
-            task_keywords=task_keywords,
-            task_difficulty=task_difficulty,
-            required_sections=required_sections,
+        reset_result = await env.reset(
+            task_description=task_config.description,
+            task_keywords=task_config.required_keywords,
+            task_difficulty=task_config.difficulty,
+            required_sections=task_config.required_sections,
+            task_id=task_id,
         )
-        observation = result.observation
-    except Exception as e:
-        print(f"[DEBUG] Environment reset failed: {e}", flush=True)
-        return {
-            "success": False,
-            "steps": 0,
-            "score": 0.0,
-            "rewards": [],
-        }
+        observation = reset_result.observation
+    except Exception as exc:
+        log_error(f"[reset-error] task={task_id}: {exc}")
+        return {"success": False, "steps": 0, "rewards": rewards}
 
-    # Get workflow order
-    workflow_agents = get_all_agent_ids()
-
-    # Run through workflow
-    for step, agent_id in enumerate(workflow_agents, 1):
-        # Check if episode is done
+    for step_number, agent_id in enumerate(get_all_agent_ids(), start=1):
         if observation.done:
             break
 
-        # Get model response
         action_data = get_model_message(
-            client,
-            step,
-            agent_id,
-            observation,
-            task_description,
-        )
-
-        # Log reasoning for judges to see AI thinking
-        log_reasoning(step, agent_id, action_data.get("reasoning", ""))
-
-        # Create action
-        action = SkyPlanAction(
+            client=client,
+            step=step_number,
             agent_id=agent_id,
-            action_type=action_data["action_type"],
-            reasoning=action_data["reasoning"],
-            content=action_data["content"],
+            observation=observation,
+            task_description=task_config.description,
         )
+        action_data["agent_id"] = agent_id
 
-        # Step environment
+        try:
+            action = SkyPlanAction(
+                agent_id=agent_id,
+                action_type=action_data["action_type"],
+                reasoning=action_data["reasoning"],
+                content=action_data["content"],
+            )
+        except Exception as exc:
+            log_error(f"[action-error] task={task_id} step={step_number}: {exc}")
+            rewards.append(0.0)
+            steps_taken = step_number
+            log_step(
+                step=step_number,
+                action=format_action_string(action_data),
+                reward=0.0,
+                done=False,
+                error=str(exc),
+            )
+            break
+
+        step_error: str | None = None
+        done = False
+        reward = 0.0
+
         try:
             result = await env.step(action)
             observation = result.observation
-            reward = result.reward or 0.0
-            done = result.done
-            last_error = None
+            reward = float(result.reward or 0.0)
+            done = bool(result.done)
+            if observation.errors:
+                step_error = observation.errors[-1]
+        except Exception as exc:
+            step_error = str(exc)
+            log_error(f"[step-error] task={task_id} step={step_number}: {exc}")
 
-            # Accumulate documents from observation
-            documents = observation.documents
-        except Exception as e:
-            print(f"[DEBUG] Environment step failed: {e}", flush=True)
-            reward = 0.0
-            done = False
-            last_error = str(e)
-
-        # Track
         rewards.append(reward)
-        steps_taken = step
-
-        # Log step
-        action_str = format_action_string(action_data)
+        steps_taken = step_number
         log_step(
-            step=step,
-            action=action_str,
+            step=step_number,
+            action=format_action_string(action_data),
             reward=reward,
             done=done,
-            error=last_error,
+            error=step_error,
         )
 
-        # Check if done
+        if step_error:
+            break
         if done:
             break
 
-    # Calculate final score
-    # Normalize score to [0, 1]
-    if rewards:
-        score = sum(rewards) / len(rewards)
-    else:
-        score = 0.0
-    score = max(0.0, min(score, 1.0))
+    average_reward = sum(rewards) / len(rewards) if rewards else 0.0
+    success = average_reward >= SUCCESS_SCORE_THRESHOLD
+    return {"success": success, "steps": steps_taken, "rewards": rewards}
 
-    # Determine success
-    success = score >= SUCCESS_SCORE_THRESHOLD
 
-    return {
-        "success": success,
-        "steps": steps_taken,
-        "score": score,
-        "rewards": rewards,
-    }
+def resolve_task_ids() -> list[str]:
+    """Resolve the task selector into concrete task ids."""
+
+    if not TASK_SELECTOR or TASK_SELECTOR.lower() == "all":
+        return list(TASKS.keys())
+    if TASK_SELECTOR not in TASKS:
+        raise ValueError(f"Unknown task: {TASK_SELECTOR}")
+    return [TASK_SELECTOR]
 
 
 async def main() -> None:
-    """Main inference function."""
-    # Validate required environment variables
-    if not HF_TOKEN:
-        print("[ERROR] HF_TOKEN or API_KEY environment variable is required", flush=True)
-        sys.exit(1)
+    """Execute the configured task set against the local environment image."""
 
-    # Initialize OpenAI client
+    if not HF_TOKEN:
+        log_error("HF_TOKEN or API_KEY environment variable is required")
+        raise SystemExit(1)
+
+    try:
+        task_ids = resolve_task_ids()
+    except ValueError as exc:
+        log_error(str(exc))
+        raise SystemExit(1) from exc
+
     client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
-    # Connect to environment
     try:
         env = await AgentenvEnv.from_docker_image(IMAGE_NAME)
-    except Exception as e:
-        print(f"[ERROR] Failed to connect to environment: {e}", flush=True)
-        sys.exit(1)
+    except Exception as exc:
+        log_error(f"Failed to connect to environment: {exc}")
+        raise SystemExit(1) from exc
 
-    # Get task configuration
-    task_config = TASKS.get(TASK_NAME)
-    if not task_config:
-        print(f"[ERROR] Unknown task: {TASK_NAME}", flush=True)
-        sys.exit(1)
-
-    # Log start
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
-
-    # Run episode
-    result = await run_episode(client, env, TASK_NAME, task_config)
-
-    # Log end
-    log_end(
-        success=result["success"],
-        steps=result["steps"],
-        score=result["score"],
-        rewards=result["rewards"],
-    )
-
-    # Close environment
     try:
-        await env.close()
-    except Exception as e:
-        print(f"[DEBUG] env.close() error: {e}", flush=True)
+        for task_id in task_ids:
+            task_config = TASKS[task_id]
+            log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
+            result = await run_episode(client, env, task_id, task_config)
+            log_end(
+                success=result["success"],
+                steps=result["steps"],
+                rewards=result["rewards"],
+            )
+    finally:
+        try:
+            await env.close()
+        except Exception as exc:
+            log_error(f"env.close() error: {exc}")
 
 
 if __name__ == "__main__":

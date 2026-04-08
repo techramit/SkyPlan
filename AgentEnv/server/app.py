@@ -28,6 +28,8 @@ Usage:
     python -m server.app
 """
 
+import os
+
 try:
     from openenv.core.env_server.http_server import create_app
 except Exception as e:  # pragma: no cover
@@ -38,7 +40,7 @@ except Exception as e:  # pragma: no cover
 try:
     from ..models import SkyPlanAction, SkyPlanObservation
     from .AgentEnv_environment import SkyPlanEnvironment
-except ModuleNotFoundError:
+except (ImportError, ModuleNotFoundError):
     from models import SkyPlanAction, SkyPlanObservation
     from server.AgentEnv_environment import SkyPlanEnvironment
 
@@ -49,7 +51,7 @@ app = create_app(
     SkyPlanAction,
     SkyPlanObservation,
     env_name="AgentEnv",
-    max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
+    max_concurrent_envs=int(os.getenv("SKYPLAN_MAX_CONCURRENT_ENVS", "4")),
 )
 
 
@@ -76,9 +78,4 @@ def main(host: str = "0.0.0.0", port: int = 8000):
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    main(port=args.port)
+    main()

@@ -11,7 +11,7 @@ A multi-agent planning environment where specialized agents collaborate
 to transform an idea into structured planning documents.
 """
 
-from datetime import datetime
+import re
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
@@ -21,17 +21,18 @@ try:
     from ..models import (
         ACTION_TO_DOCUMENT,
         Document,
-        DocumentType,
         DocumentStatus,
         DocumentStatusConfig,
+        DocumentType,
         Feedback,
         LastAction,
         SkyPlanAction,
         SkyPlanObservation,
         ValidationConfig,
         WorkflowConfig,
+        utc_timestamp,
     )
-    from ..reward import RewardCalculator, RewardConfig
+    from ..reward import RewardCalculator
     from ..workflow import (
         get_first_agent,
         get_handoff_message,
@@ -42,17 +43,18 @@ except ImportError:
     from models import (
         ACTION_TO_DOCUMENT,
         Document,
-        DocumentType,
         DocumentStatus,
         DocumentStatusConfig,
+        DocumentType,
         Feedback,
         LastAction,
         SkyPlanAction,
         SkyPlanObservation,
         ValidationConfig,
         WorkflowConfig,
+        utc_timestamp,
     )
-    from reward import RewardCalculator, RewardConfig
+    from reward import RewardCalculator
     from workflow import (
         get_first_agent,
         get_handoff_message,
@@ -61,24 +63,67 @@ except ImportError:
     )
 
 
+TOKEN_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{2,}")
+TOKEN_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "into",
+    "your",
+    "their",
+    "they",
+    "them",
+    "must",
+    "need",
+    "more",
+    "also",
+    "have",
+    "has",
+    "had",
+    "can",
+    "will",
+    "should",
+    "would",
+    "could",
+    "please",
+    "document",
+    "documents",
+    "feedback",
+    "validation",
+    "strategic",
+    "review",
+    "revision",
+    "details",
+    "detail",
+    "team",
+}
+ROLE_AUTHORING_AGENTS = {"maya", "elon", "jordan", "robert"}
+BLOCKING_FEEDBACK_TYPES = {"concern", "request_revision"}
+COMPANION_DOCUMENTS = {
+    "jordan": ("TRD", "ARCHITECTURE"),
+    "robert": ("ROADMAP", "TASKS"),
+}
+
+
 class SkyPlanEnvironment(Environment):
     """
     Multi-agent planning environment for SkyPlan.
 
     Six specialized agents collaborate to produce planning documents:
-    - Maya (Research Analyst) → Research Summary
-    - Elon (Product Manager) → PRD, feature list
-    - Jordan (Architect) → TRD, system architecture
-    - Robert (Execution Planner) → Roadmap, sprint backlog
-    - Taylor (Validator) → Validation report
-    - Sam (CEO) → Final strategic approval
+    - Maya (Research Analyst) -> Research Summary
+    - Elon (Product Manager) -> PRD, feature list
+    - Jordan (Architect) -> TRD, system architecture
+    - Robert (Execution Planner) -> Roadmap, sprint backlog
+    - Taylor (Validator) -> Validation report
+    - Sam (CEO) -> Final strategic approval
 
-    Workflow: Maya → Elon → Jordan → Robert → Taylor → Sam
+    Workflow: Maya -> Elon -> Jordan -> Robert -> Taylor -> Sam
     """
 
-    # Enable concurrent WebSocket sessions.
-    # Each session has its own isolated state, allowing multiple
-    # projects to run simultaneously.
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
 
     def __init__(
@@ -87,13 +132,8 @@ class SkyPlanEnvironment(Environment):
         use_llm_reward: bool = True,
         llm_api_key: str | None = None,
     ):
-        """Initialize the SkyPlan environment with isolated state.
+        """Initialize the SkyPlan environment with isolated state."""
 
-        Args:
-            total_steps: Total number of steps for the planning workflow
-            use_llm_reward: Whether to use LLM for quality assessment
-            llm_api_key: API key for LLM reward service
-        """
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._current_agent = get_first_agent()
         self._step_number = 1
@@ -102,18 +142,22 @@ class SkyPlanEnvironment(Environment):
         self._feedback: list[Feedback] = []
         self._last_action_result: LastAction | None = None
         self._task_description = ""
+        self._task_id: str | None = None
         self._done = False
 
-        # Initialize reward calculator
+        self._task_keywords: list[str] = []
+        self._task_difficulty: str = "medium"
+        self._required_sections: list[str] = []
+
+        self._feedback_generated_this_step: list[Feedback] = []
+        self._feedback_resolved_this_step: list[Feedback] = []
+        self._new_approvals_this_step: list[tuple[str, str]] = []
+        self._primary_feedback_addressed_this_step = False
+
         self._reward_calculator = RewardCalculator(
             use_llm=use_llm_reward,
             api_key=llm_api_key,
         )
-
-        # Task configuration (can be set via reset)
-        self._task_keywords: list[str] = []
-        self._task_difficulty: str = "medium"
-        self._required_sections: list[str] = []
 
     def reset(
         self,
@@ -121,19 +165,10 @@ class SkyPlanEnvironment(Environment):
         task_keywords: list[str] | None = None,
         task_difficulty: str = "medium",
         required_sections: list[str] | None = None,
+        task_id: str | None = None,
     ) -> SkyPlanObservation:
-        """
-        Reset the environment for a new episode.
+        """Reset the environment for a new episode."""
 
-        Args:
-            task_description: The task description/goal
-            task_keywords: Required keywords for the task
-            task_difficulty: Task difficulty level (easy, medium, hard)
-            required_sections: Required sections for documents
-
-        Returns:
-            SkyPlanObservation with initial state, ready for the first agent to start
-        """
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._current_agent = get_first_agent()
         self._step_number = 1
@@ -141,14 +176,14 @@ class SkyPlanEnvironment(Environment):
         self._feedback = []
         self._last_action_result = None
         self._task_description = task_description
+        self._task_id = task_id
         self._done = False
 
-        # Set task configuration
         self._task_keywords = task_keywords or []
         self._task_difficulty = task_difficulty
         self._required_sections = required_sections or []
+        self._reset_step_tracking()
 
-        # Reset reward calculator
         self._reward_calculator.reset()
 
         return self._build_observation(
@@ -158,30 +193,22 @@ class SkyPlanEnvironment(Environment):
         )
 
     def step(self, action: SkyPlanAction) -> SkyPlanObservation:  # type: ignore[override]
-        """
-        Execute a step in the environment - "The Hand-Off".
+        """Execute a step in the environment."""
 
-        This is where the supervisor does their job:
-        1. The Inspection: Check if the agent turned in valid work
-        2. The Filing: Save the document to the Shared Folder
-        3. The Next Person: Tell the next agent it's their turn
-        4. The Performance Review: Give a reward based on quality
-
-        Args:
-            action: SkyPlanAction containing agent_id, action_type, reasoning, and content
-
-        Returns:
-            SkyPlanObservation with updated state
-        """
         self._state.step_count += 1
+        self._reset_step_tracking()
 
-        # 1. The Inspection: Validate action matches current agent
         if not self._is_valid_agent(action):
+            self._last_action_result = LastAction.create(
+                agent_id=action.agent_id,
+                action_type=action.action_type,
+                result="failure",
+                message=f"Expected agent {self._current_agent}, got {action.agent_id}",
+            )
             return self._create_error_observation(
                 f"Expected agent {self._current_agent}, got {action.agent_id}"
             )
 
-        # 2. The Inspection: Validate document quality
         validation_result = self._validate_action(action)
         if not validation_result["is_valid"]:
             self._last_action_result = LastAction.create(
@@ -192,84 +219,69 @@ class SkyPlanEnvironment(Environment):
             )
             return self._create_error_observation(validation_result["error"])
 
-        # 3. The Filing: Save document to Shared Folder
         self._file_document(action)
-
-        # 3.5. Generate and process feedback
+        self._process_feedback_resolutions(action.agent_id, action)
         self._generate_and_process_feedback(action)
 
-        # 4. The Performance Review: Calculate reward using the new reward system
-        # Track feedback values for reward calculation
-        feedback_generated_this_step = self._feedback[-(self._last_action_result.feedback_generated_count or 0):] if self._last_action_result else []
-        feedback_resolved_this_step = [fb for fb in self._feedback if fb.resolved and fb.resolution_timestamp and fb.resolution_timestamp.startswith(datetime.utcnow().isoformat()[:10])]
-        new_approvals_this_step = [(doc_type, doc.author) for doc_type, doc in self._documents.items() if doc.status == "approved" and doc.updated_at and doc.updated_at.startswith(datetime.utcnow().isoformat()[:10])]
-
-        step_reward = self._reward_calculator.calculate_step_reward(
+        reward = self._reward_calculator.calculate_step_reward(
             action=action,
             documents=self._documents,
             task_keywords=self._task_keywords,
             task_difficulty=self._task_difficulty,
             required_sections=self._required_sections,
-            feedback_generated=feedback_generated_this_step,
-            feedback_resolved=feedback_resolved_this_step,
-            new_approvals=new_approvals_this_step,
-        )
-        reward = step_reward.total
+            feedback_generated=self._feedback_generated_this_step,
+            feedback_resolved=self._feedback_resolved_this_step,
+            new_approvals=self._new_approvals_this_step,
+        ).total
 
-        # 5. The Next Person: Move to next agent
         next_agent = get_next_agent(self._current_agent)
         if next_agent:
             self._current_agent = next_agent
             self._step_number += 1
         else:
-            # No next agent - this is the end of the workflow
             self._done = True
 
-        # 6. Check if episode is done
         if self._step_number > self._total_steps:
             self._done = True
 
-        # 7. Create LastAction record
+        message = f"{action.action_type} completed successfully"
+        if self._feedback_generated_this_step or self._feedback_resolved_this_step:
+            message += (
+                f" ({len(self._feedback_generated_this_step)} feedback generated, "
+                f"{len(self._feedback_resolved_this_step)} resolved)"
+            )
+
         self._last_action_result = LastAction.create(
             agent_id=action.agent_id,
             action_type=action.action_type,
             result="success",
-            message=f"{action.action_type} completed successfully",
+            message=message,
+        )
+        self._last_action_result.feedback_generated_count = len(self._feedback_generated_this_step)
+        self._last_action_result.resolved_feedback_count = len(self._feedback_resolved_this_step)
+        self._last_action_result.primary_feedback_addressed = (
+            self._primary_feedback_addressed_this_step
         )
 
-        # 7.5. Process feedback resolutions after action completion
-        self._process_feedback_resolutions(action.agent_id, action)
-
-        # Get handoff message for the next agent
         handoff_msg = get_handoff_message(action.agent_id)
         reasoning_msg = f"Action processed by {action.agent_id}. {handoff_msg}"
 
         return self._build_observation(
             result=f"{action.action_type} completed successfully",
             reasoning=reasoning_msg,
-            status="in_progress",
+            status="completed" if self._done else "in_progress",
             reward=reward,
         )
 
     @property
     def state(self) -> State:
-        """
-        Get the current environment state.
+        """Get the current environment state."""
 
-        Returns:
-            Current State with episode_id and step_count
-        """
         return self._state
 
     def get_episode_reward(self) -> dict:
-        """
-        Get the final episode reward including completion bonus.
+        """Get the final episode reward including completion bonus."""
 
-        This should be called after the episode is done.
-
-        Returns:
-            Dictionary with final_score, breakdown, and details
-        """
         episode_reward = self._reward_calculator.calculate_episode_reward(
             documents=self._documents,
         )
@@ -282,39 +294,28 @@ class SkyPlanEnvironment(Environment):
             "step_count": len(episode_reward.step_rewards),
         }
 
-    # ==========================================================================
-    # Private Methods - Internal Implementation
-    # ==========================================================================
+    def _reset_step_tracking(self) -> None:
+        """Reset per-step workflow metrics used by rewards and observations."""
+
+        self._feedback_generated_this_step = []
+        self._feedback_resolved_this_step = []
+        self._new_approvals_this_step = []
+        self._primary_feedback_addressed_this_step = False
 
     def _is_valid_agent(self, action: SkyPlanAction) -> bool:
-        """Check if the action is from the expected agent.
+        """Check if the action is from the expected agent."""
 
-        Args:
-            action: The action to validate
-
-        Returns:
-            True if agent matches current_agent, False otherwise
-        """
         return action.agent_id == self._current_agent
 
     def _validate_action(self, action: SkyPlanAction) -> dict:
-        """
-        The Inspection: Validate if the agent turned in valid work.
+        """Validate action quality before it enters the workflow."""
 
-        Args:
-            action: The action to validate
-
-        Returns:
-            Dict with 'is_valid' (bool) and 'error' (str if invalid)
-        """
-        # Check if content meets minimum length
         if not action.content or len(action.content.strip()) < ValidationConfig.MIN_CONTENT_LENGTH:
             return {
                 "is_valid": False,
                 "error": f"Content too short or empty for action {action.action_type}",
             }
 
-        # Check if reasoning meets minimum length
         if not action.reasoning or len(action.reasoning.strip()) < ValidationConfig.MIN_REASONING_LENGTH:
             return {
                 "is_valid": False,
@@ -325,150 +326,117 @@ class SkyPlanEnvironment(Environment):
 
     def _file_document(self, action: SkyPlanAction) -> None:
         """
-        The Filing: Save the document to the Shared Folder with dynamic status updates.
+        Save the current action output and apply the first workflow status.
 
-        This method is called after every action to:
-        1. Map action_type to document_type
-        2. Determine the appropriate document status based on action type
-        3. Create new document or update existing document with content and status
-        4. Apply status transitions automatically based on DocumentStatusConfig
-
-        The status transition is dynamic:
-        - For content-creation actions (WRITE_PRD, DESIGN_ARCHITECTURE, etc.), status = "draft"
-        - For status-changes actions (APPROVE_DOCUMENT, MARK_DOCUMENT_REVIEW, etc.),
-          status = DocumentStatusConfig.STATUS_TRANSITIONS[action.action_type]
-        - Status is extracted from the DocumentStatusConfig configuration
-
-        Args:
-            action: The action containing the document content and action_type
-
-        Returns:
-            None
-
-        Examples:
-            - action.action_type="WRITE_PRD" → doc_type="PRD", status="draft"
-            - action.action_type="APPROVE_DOCUMENT" → doc_type="VALIDATION", status="approved"
-            - action.action_type="FINAL_APPROVAL" → doc_type="STRATEGY", status="approved"
+        Authoring agents always create or refresh drafts. Taylor and Sam create
+        review artifacts that begin in review until their validation or strategy
+        pass decides whether the project is approved or sent back for revision.
         """
+
         doc_type = ACTION_TO_DOCUMENT.get(action.action_type)
         if not doc_type:
-            return  # Action doesn't produce a document
+            return
 
-        try:
-            timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = utc_timestamp()
+        action_status = DocumentStatusConfig.STATUS_TRANSITIONS.get(action.action_type)
+        document = self._documents.get(doc_type)
 
-            # DYNAMIC STATUS DETERMINATION: Get status from configuration
-            # This is the key integration: automatically map actions to document statuses
-            action_status = DocumentStatusConfig.STATUS_TRANSITIONS.get(action.action_type)
+        if document is None:
+            document = Document(
+                type=doc_type,
+                content=action.content,
+                author=action.agent_id,
+                created_at=timestamp,
+                updated_at=timestamp,
+                status=DocumentStatus.DRAFT,
+            )
+            self._documents[doc_type] = document
+        else:
+            if action.content.strip():
+                document.content = action.content
+            document.author = action.agent_id
+            document.updated_at = timestamp
 
-            # DEBUG: Log for testing status transitions
-            if action_status:
-                print(f"[STATUS TRANSITION] {action.action_type} → {action_status}")
+        if action_status:
+            self._set_document_status(doc_type, action_status, timestamp=timestamp)
+        elif action.agent_id in ROLE_AUTHORING_AGENTS:
+            self._set_document_status(doc_type, DocumentStatus.DRAFT, timestamp=timestamp)
+        elif action.agent_id == "taylor" and doc_type == DocumentType.VALIDATION:
+            self._set_document_status(doc_type, DocumentStatus.IN_REVIEW, timestamp=timestamp)
+        elif action.agent_id == "sam" and doc_type == DocumentType.STRATEGY:
+            initial_status = (
+                DocumentStatus.REJECTED
+                if action.action_type == "REQUEST_REVISION"
+                else DocumentStatus.IN_REVIEW
+            )
+            self._set_document_status(doc_type, initial_status, timestamp=timestamp)
 
-            # Apply status change to the document
-            if doc_type in self._documents:
-                # Update existing document
-                if len(action.content.strip()) > 5:  # Has meaningful content
-                    self._documents[doc_type].content = action.content
-                self._documents[doc_type].author = action.agent_id
-                self._documents[doc_type].updated_at = timestamp
+        self._sync_companion_documents(
+            action=action,
+            primary_doc_type=doc_type,
+            timestamp=timestamp,
+        )
 
-                # Apply dynamic status transition if available
-                if action_status:
-                    self._documents[doc_type].status = action_status
-                    print(f"[UPDATED] {doc_type} status → {action_status}")
-            else:
-                # Create new document - determine initial status
-                # For new documents, default to DRAFT unless action specifies otherwise
-                if action_status:
-                    # Action explicitly sets status (e.g., MARK_DOCUMENT_REVIEW)
-                    status = action_status
-                else:
-                    # Default content-creation actions to DRAFT
-                    status = DocumentStatus.DRAFT
+    def _set_document_status(
+        self,
+        doc_type: str,
+        status: DocumentStatus | str,
+        *,
+        timestamp: str | None = None,
+    ) -> None:
+        """Apply a document status transition and record new approvals."""
 
-                self._documents[doc_type] = Document(
-                    type=doc_type,
-                    content=action.content,
+        document = self._documents.get(doc_type)
+        if document is None:
+            return
+
+        status_value = status.value if isinstance(status, DocumentStatus) else status
+        previous_status = document.status
+        document.status = status_value
+        document.updated_at = timestamp or utc_timestamp()
+
+        if previous_status != DocumentStatus.APPROVED and status_value == DocumentStatus.APPROVED:
+            approval = (doc_type, document.author)
+            if approval not in self._new_approvals_this_step:
+                self._new_approvals_this_step.append(approval)
+
+    def _sync_companion_documents(
+        self,
+        action: SkyPlanAction,
+        primary_doc_type: str,
+        timestamp: str,
+    ) -> None:
+        """Keep paired architecture/planning documents in sync for single-turn agents."""
+
+        companion_types = COMPANION_DOCUMENTS.get(action.agent_id)
+        if not companion_types:
+            return
+
+        for companion_doc_type in companion_types:
+            if companion_doc_type == primary_doc_type:
+                continue
+
+            companion_document = self._documents.get(companion_doc_type)
+            companion_content = (
+                f"# {companion_doc_type}\n"
+                f"Derived from {primary_doc_type} during {action.action_type}.\n\n"
+                f"{action.content}"
+            )
+
+            if companion_document is None:
+                self._documents[companion_doc_type] = Document(
+                    type=companion_doc_type,
+                    content=companion_content,
                     author=action.agent_id,
                     created_at=timestamp,
                     updated_at=timestamp,
-                    status=status,
+                    status=DocumentStatus.DRAFT,
                 )
-                print(f"[CREATED] {doc_type} with status: {status}")
-                print(
-                    f"[CONFIG] DocumentStatusConfig.STATUS_TRANSITIONS = {DocumentStatusConfig.STATUS_TRANSITIONS}"
-                )
-        except Exception as e:
-            # Log error but don't fail the step
-            print(f"Error filing document: {e}")
-
-    def _calculate_reward(self, action: SkyPlanAction) -> float:
-        """
-        The Performance Review: Calculate reward based on quality.
-
-        Args:
-            action: The action to score
-
-        Returns:
-            Reward in range 0.0 to 1.0
-        """
-        # Base reward for completing action
-        reward = RewardConfig.BASE_REWARD
-
-        # Content length bonus
-        content_length = len(action.content)
-        length_bonus = min(
-            content_length / RewardConfig.CONTENT_LENGTH_TARGET,
-            RewardConfig.CONTENT_LENGTH_WEIGHT,
-        )
-        reward += length_bonus
-
-        # Reasoning quality bonus
-        reasoning_length = len(action.reasoning)
-        reasoning_bonus = min(
-            reasoning_length / RewardConfig.REASONING_TARGET,
-            RewardConfig.REASONING_WEIGHT,
-        )
-        reward += reasoning_bonus
-
-        # Document structure bonus
-        structure_bonus = self._calculate_structure_bonus(action.content)
-        reward += structure_bonus
-
-        # Cap at maximum reward
-        return min(reward, RewardConfig.MAX_REWARD)
-
-    def _calculate_structure_bonus(self, content: str) -> float:
-        """Calculate structure bonus based on document content.
-
-        Args:
-            content: The document content to analyze
-
-        Returns:
-            Structure bonus in range 0.0 to STRUCTURE_WEIGHT
-        """
-        bonus = 0.0
-        weight_per_element = RewardConfig.STRUCTURE_WEIGHT / 4
-
-        # Has headers
-        if "##" in content:
-            bonus += weight_per_element
-
-        # Has lists
-        if "-" in content or "*" in content:
-            bonus += weight_per_element
-
-        # Has multiple paragraphs
-        if content.count("\n") > 5:
-            bonus += weight_per_element
-
-        # Has key structural keywords
-        keywords = ["overview", "summary", "goal", "objective"]
-        if any(keyword in content.lower() for keyword in keywords):
-            bonus += weight_per_element
-
-        return bonus
+            else:
+                companion_document.content = companion_content
+                companion_document.author = action.agent_id
+                companion_document.updated_at = timestamp
+                companion_document.status = DocumentStatus.DRAFT
 
     def _build_observation(
         self,
@@ -477,30 +445,17 @@ class SkyPlanEnvironment(Environment):
         status: str,
         reward: float = 0.0,
     ) -> SkyPlanObservation:
-        """Build a SkyPlanObservation with current state.
+        """Build a SkyPlanObservation with current state."""
 
-        Args:
-            result: Result message
-            reasoning: System reasoning
-            status: Current workflow status
-            reward: Reward value
-
-        Returns:
-            Complete SkyPlanObservation with document status summary
-        """
-        # Calculate document status summary
         status_counts = {"draft": 0, "in_review": 0, "approved": 0, "rejected": 0}
-        awaiting_review = []
+        awaiting_review: list[str] = []
 
         for doc_type, doc in self._documents.items():
-            # Count by status
             if doc.status in status_counts:
                 status_counts[doc.status] += 1
-
-            # Track documents awaiting review/approval
-            if doc.status == "draft":
+            if doc.status == DocumentStatus.DRAFT:
                 awaiting_review.append(f"{doc_type} (needs review)")
-            elif doc.status == "in_review":
+            elif doc.status == DocumentStatus.IN_REVIEW:
                 awaiting_review.append(f"{doc_type} (in review)")
 
         return SkyPlanObservation(
@@ -516,298 +471,417 @@ class SkyPlanEnvironment(Environment):
             current_state={
                 "status": status,
                 "phase": self._get_current_phase(),
+                "task_id": self._task_id or "",
                 "document_summary": status_counts,
+                "unresolved_feedback_count": len(self.get_unresolved_feedback()),
             },
+            document_status_summary=status_counts,
+            documents_awaiting_review=awaiting_review,
             errors=[],
             step_count=self._state.step_count,
             done=self._done,
             reward=reward,
-            document_status_summary=status_counts,
-            documents_awaiting_review=awaiting_review,
         )
 
     def _create_error_observation(self, error_message: str) -> SkyPlanObservation:
-        """Create an observation with an error state.
+        """Create an observation with an error state."""
 
-        Args:
-            error_message: The error message to include
-
-        Returns:
-            SkyPlanObservation with error state
-        """
-        return SkyPlanObservation(
-            task_description=self._task_description,
+        observation = self._build_observation(
             result="Action failed",
             reasoning=error_message,
-            current_agent=self._current_agent,
-            step_number=self._step_number,
-            total_steps=self._total_steps,
-            documents=self._documents,
-            feedback=self._feedback,
-            last_action_result=self._last_action_result,
-            current_state={"status": "error"},
-            errors=[error_message],
-            step_count=self._state.step_count,
-            done=False,
+            status="error",
             reward=0.0,
         )
+        observation.errors = [error_message]
+        return observation
 
     def _get_current_phase(self) -> str:
-        """Get the current planning phase based on step number.
+        """Get the current planning phase based on step number."""
 
-        Returns:
-            Current phase name
-        """
         phase_index = min(
             (self._step_number - 1) // 2,
             len(WorkflowConfig.PHASES) - 1,
         )
         return WorkflowConfig.PHASES[phase_index]
 
-    # ============================================================================
-    # Feedback Generation and Processing Methods
-    # ============================================================================
-
     def _generate_collaborative_feedback(self, action: SkyPlanAction) -> Feedback | None:
-        """Generate collaborative feedback based on document quality.
-
-        Args:
-            action: The action to evaluate
-
-        Returns:
-            Feedback object or None if no feedback needed
-        """
-        # Inline configuration since FeedbackConfig caused issues
-        ENABLE_COLLABORATIVE_FEEDBACK = True
-        COLLABORATIVE_FEEDBACK_THRESHOLD = 0.6
-
-        if not ENABLE_COLLABORATIVE_FEEDBACK:
-            return None
+        """Generate collaborative feedback when a new document is weak."""
 
         doc_type = ACTION_TO_DOCUMENT.get(action.action_type)
         if not doc_type:
             return None
 
-        # Calculate quality score
         quality_score = self._calculate_document_quality(action.content, doc_type)
+        if quality_score >= 0.6:
+            return None
 
-        if quality_score < COLLABORATIVE_FEEDBACK_THRESHOLD:
-            return Feedback.create(
-                from_agent=action.agent_id,
-                to_agent="",  # General feedback
-                document_type=doc_type,
-                feedback_type="suggestion",
-                comment=f"Document quality score ({quality_score:.2f}) suggests improvements needed. Consider expanding content with specific examples and technical details."
-            )
-        return None
+        return Feedback.create(
+            from_agent=action.agent_id,
+            to_agent="",
+            document_type=doc_type,
+            feedback_type="suggestion",
+            comment=(
+                f"Document quality score ({quality_score:.2f}) suggests improvements needed. "
+                "Consider expanding content with clearer structure, task-specific details, and "
+                "handoff-ready guidance for downstream agents."
+            ),
+        )
 
-    def _generate_validation_feedback(self, agent_id: str) -> list[Feedback]:
-        """Generate comprehensive validation feedback from Taylor.
+    def _generate_validation_feedback(
+        self,
+        agent_id: str,
+        action: SkyPlanAction | None = None,
+    ) -> list[Feedback]:
+        """Generate validation feedback from Taylor and transition document statuses."""
 
-        Args:
-            agent_id: Agent being validated (should be "taylor")
-
-        Returns:
-            List of Feedback objects
-        """
-        # Inline configuration
-        ENABLE_VALIDATOR_FEEDBACK = True
-        TAYLOR_APPROVAL_THRESHOLD = 0.7
-
-        if not ENABLE_VALIDATOR_FEEDBACK or agent_id != "taylor":
+        if agent_id != "taylor":
             return []
 
-        feedback_list = []
-        required_docs = get_required_documents(agent_id)
+        feedback_list: list[Feedback] = []
+        blocking_findings = False
 
-        for doc_type in required_docs:
-            doc = self._documents.get(doc_type)
-            if not doc or doc.author == "taylor":  # Don't self-review
+        for doc_type in get_required_documents(agent_id):
+            document = self._documents.get(doc_type)
+            if document is None:
+                feedback_list.append(
+                    Feedback.create(
+                        from_agent="taylor",
+                        to_agent="",
+                        document_type=doc_type,
+                        feedback_type="concern",
+                        comment=f"Missing required {doc_type} document for validation.",
+                    )
+                )
+                blocking_findings = True
                 continue
 
-            # Calculate quality score
-            quality_score = self._calculate_document_quality(doc.content, doc_type)
+            if document.author == "taylor":
+                continue
 
-            # Identify specific issues
-            issues = self._identify_document_issues(doc, quality_score)
+            self._set_document_status(doc_type, DocumentStatus.IN_REVIEW)
+            quality_score = self._calculate_document_quality(document.content, doc_type)
+            issues = self._identify_document_issues(document, quality_score)
 
             if issues:
-                # Choose feedback type based on severity
-                if quality_score < 0.4:
+                if quality_score < 0.45:
                     feedback_type = "concern"
-                elif quality_score < 0.6:
+                    next_status = DocumentStatus.REJECTED
+                    blocking_findings = True
+                elif quality_score < 0.65:
                     feedback_type = "critique"
+                    next_status = DocumentStatus.IN_REVIEW
                 else:
                     feedback_type = "suggestion"
+                    next_status = DocumentStatus.IN_REVIEW
 
-                feedback = Feedback.create(
-                    from_agent="taylor",
-                    to_agent=doc.author,
-                    document_type=doc_type,
-                    feedback_type=feedback_type,
-                    comment=f"Validation feedback: {issues}"
+                feedback_list.append(
+                    Feedback.create(
+                        from_agent="taylor",
+                        to_agent=document.author,
+                        document_type=doc_type,
+                        feedback_type=feedback_type,
+                        comment=f"Validation feedback: {issues}",
+                    )
                 )
-                feedback_list.append(feedback)
+                self._set_document_status(doc_type, next_status)
+                continue
 
-                # Update document status based on quality
-                if quality_score >= TAYLOR_APPROVAL_THRESHOLD:
-                    doc.status = "approved"
-                elif quality_score >= 0.5:
-                    doc.status = "in_review"
-                else:
-                    doc.status = "rejected"
+            feedback_list.append(
+                Feedback.create(
+                    from_agent="taylor",
+                    to_agent=document.author,
+                    document_type=doc_type,
+                    feedback_type="approval",
+                    comment=f"{doc_type} meets the current validation bar and is approved for strategy review.",
+                )
+            )
+            self._set_document_status(doc_type, DocumentStatus.APPROVED)
+
+        if DocumentType.VALIDATION in self._documents:
+            validation_status = (
+                DocumentStatus.IN_REVIEW if blocking_findings else DocumentStatus.APPROVED
+            )
+            self._set_document_status(DocumentType.VALIDATION, validation_status)
 
         return feedback_list
 
-    def _generate_strategic_feedback(self, agent_id: str) -> list[Feedback]:
-        """Generate strategic feedback from CEO Sam.
+    def _generate_strategic_feedback(
+        self,
+        agent_id: str,
+        action: SkyPlanAction | None = None,
+    ) -> list[Feedback]:
+        """Generate strategic feedback from CEO Sam and finalize approval state."""
 
-        Args:
-            agent_id: Should be "sam"
-
-        Returns:
-            List of Feedback objects
-        """
-        # Inline configuration
-        ENABLE_STRATEGIC_FEEDBACK = True
-
-        if not ENABLE_STRATEGIC_FEEDBACK or agent_id != "sam":
+        if agent_id != "sam":
             return []
 
-        feedback_list = []
+        feedback_list: list[Feedback] = []
         required_docs = get_required_documents(agent_id)
 
-        # Check for missing documents
-        missing_docs = [d for d in required_docs if d not in self._documents]
+        missing_docs = [doc_type for doc_type in required_docs if doc_type not in self._documents]
         if missing_docs:
-            feedback_list.append(Feedback.create(
-                from_agent="sam",
-                to_agent="",
-                document_type="STRATEGY",
-                feedback_type="concern",
-                comment=f"Missing required documents: {', '.join(missing_docs)}"
-            ))
+            feedback_list.append(
+                Feedback.create(
+                    from_agent="sam",
+                    to_agent="",
+                    document_type="STRATEGY",
+                    feedback_type="concern",
+                    comment=f"Missing required documents: {', '.join(missing_docs)}",
+                )
+            )
 
-        # Check document consistency
         consistency_score = self._check_document_consistency()
         if consistency_score < 0.7:
-            feedback_list.append(Feedback.create(
-                from_agent="sam",
-                to_agent="taylor",
-                document_type="STRATEGY",
-                feedback_type="critique",
-                comment=f"Document consistency low ({consistency_score:.2f}). Taylor, please review for alignment and identify discrepancies."
-            ))
+            feedback_list.append(
+                Feedback.create(
+                    from_agent="sam",
+                    to_agent="taylor",
+                    document_type="STRATEGY",
+                    feedback_type="critique",
+                    comment=(
+                        f"Document consistency low ({consistency_score:.2f}). "
+                        "Taylor, please reconcile cross-document assumptions before approval."
+                    ),
+                )
+            )
 
-        # Check approval status
-        approved_count = sum(1 for doc in self._documents.values() if doc.status == "approved")
-        if approved_count < len(required_docs):
-            feedback_list.append(Feedback.create(
+        required_approvals = (
+            DocumentStatusConfig.get_required_approvals(self._task_id) or required_docs
+        )
+        unapproved_docs = [
+            doc_type
+            for doc_type in required_approvals
+            if doc_type not in self._documents
+            or self._documents[doc_type].status != DocumentStatus.APPROVED
+        ]
+        if unapproved_docs or (action and action.action_type == "REQUEST_REVISION"):
+            feedback_list.append(
+                Feedback.create(
+                    from_agent="sam",
+                    to_agent="",
+                    document_type="STRATEGY",
+                    feedback_type="request_revision",
+                    comment=(
+                        "Final strategic approval is blocked until these documents are approved: "
+                        f"{', '.join(unapproved_docs or required_approvals)}"
+                    ),
+                )
+            )
+
+        if feedback_list:
+            strategy_status = (
+                DocumentStatus.REJECTED
+                if any(item.feedback_type in BLOCKING_FEEDBACK_TYPES for item in feedback_list)
+                else DocumentStatus.IN_REVIEW
+            )
+            if DocumentType.STRATEGY in self._documents:
+                self._set_document_status(DocumentType.STRATEGY, strategy_status)
+            return feedback_list
+
+        feedback_list.append(
+            Feedback.create(
                 from_agent="sam",
                 to_agent="",
                 document_type="STRATEGY",
-                feedback_type="request_revision",
-                comment=f"Only {approved_count}/{len(required_docs)} documents approved. All documents must reach 'approved' status before final strategic approval."
-            ))
+                feedback_type="approval",
+                comment="Strategy approved. The planning package is aligned, complete, and ready for execution.",
+            )
+        )
+
+        for doc_type in set(required_docs + [DocumentType.VALIDATION, DocumentType.STRATEGY]):
+            if doc_type in self._documents:
+                self._set_document_status(doc_type, DocumentStatus.APPROVED)
 
         return feedback_list
 
     def _identify_document_issues(self, doc: Document, quality_score: float) -> str:
-        """Identify specific issues in a document for feedback."""
-        issues = []
+        """Identify specific issues in a document for targeted feedback."""
 
-        if len(doc.content) < 200:
+        issues: list[str] = []
+        content_lower = doc.content.lower()
+        content_length = len(doc.content.strip())
+
+        if content_length < 200:
             issues.append("content too short")
-        if "\n\n" not in doc.content:  # No paragraphs
-            issues.append("lack of structured paragraphs")
-        if "#" not in doc.content:  # No headers
+        if "#" not in doc.content:
             issues.append("missing section headers")
+        if "\n\n" not in doc.content:
+            issues.append("lack of structured paragraphs")
+        if not any(marker in doc.content for marker in ("- ", "* ", "1. ")):
+            issues.append("missing actionable lists")
+        if self._task_keywords and not any(keyword.lower() in content_lower for keyword in self._task_keywords):
+            issues.append("missing task-specific requirements")
+        if self._required_sections and not any(
+            section.lower() in content_lower for section in self._required_sections
+        ):
+            issues.append("missing required task sections")
+        if quality_score < 0.45 and "risk" not in content_lower and doc.type in {
+            DocumentType.TRD,
+            DocumentType.ARCHITECTURE,
+            DocumentType.ROADMAP,
+            DocumentType.TASKS,
+        }:
+            issues.append("insufficient risk or dependency coverage")
 
         return "; ".join(issues)
 
     def _check_document_consistency(self) -> float:
-        """Check consistency across all planning documents."""
-        # Simple consistency check - could be enhanced
-        return 0.8  # Placeholder for now
+        """Check consistency across all planning documents using deterministic heuristics."""
+
+        documents = [doc for doc in self._documents.values() if doc.content.strip()]
+        if not documents:
+            return 0.0
+        if len(documents) == 1:
+            return 0.6
+
+        keyword_score = 1.0
+        if self._task_keywords:
+            keyword_hits = sum(
+                1
+                for doc in documents
+                if any(keyword.lower() in doc.content.lower() for keyword in self._task_keywords)
+            )
+            keyword_score = keyword_hits / len(documents)
+
+        structure_score = sum("#" in doc.content for doc in documents) / len(documents)
+        status_score = sum(doc.status != DocumentStatus.REJECTED for doc in documents) / len(documents)
+
+        keyword_sets = [self._extract_keywords(doc.content) for doc in documents]
+        overlap_scores: list[float] = []
+        for left, right in zip(keyword_sets, keyword_sets[1:]):
+            if not left or not right:
+                overlap_scores.append(0.0)
+                continue
+            overlap_scores.append(len(left & right) / len(left | right))
+        overlap_score = sum(overlap_scores) / len(overlap_scores) if overlap_scores else 0.0
+
+        consistency = (
+            0.35 * keyword_score
+            + 0.20 * structure_score
+            + 0.20 * status_score
+            + 0.25 * overlap_score
+        )
+        return max(0.0, min(consistency, 1.0))
 
     def _process_feedback_resolutions(self, agent_id: str, action: SkyPlanAction) -> None:
-        """Check if current action addresses previous feedback and mark as resolved."""
-        # Inline configuration
-        ENABLE_FEEDBACK_RESOLUTION = True
+        """Mark targeted prior feedback as resolved when the action addresses it."""
 
-        if not ENABLE_FEEDBACK_RESOLUTION:
-            return
-
-        # Get unresolved feedback targeting this agent
         unresolved_feedback = [
-            fb for fb in self._feedback
-            if not fb.resolved and (fb.to_agent == agent_id or fb.to_agent == "")
+            feedback
+            for feedback in self._feedback
+            if not feedback.resolved and feedback.to_agent in {"", agent_id}
         ]
 
-        resolved_count = 0
-        primary_feedback_addressed = False
-
         for feedback in unresolved_feedback:
-            if self._is_feedback_addressed(feedback, action):
-                feedback.resolved = True
-                feedback.resolution_timestamp = datetime.utcnow().isoformat() + "Z"
-                feedback.addressed_by = agent_id
-                resolved_count += 1
+            if not self._is_feedback_addressed(feedback, action):
+                continue
 
-                if feedback.from_agent in ["taylor", "sam"]:
-                    primary_feedback_addressed = True
+            feedback.resolved = True
+            feedback.resolution_timestamp = utc_timestamp()
+            feedback.addressed_by = agent_id
+            self._feedback_resolved_this_step.append(feedback)
 
-        # Update last action result
-        if self._last_action_result:
-            self._last_action_result.resolved_feedback_count = resolved_count
-            self._last_action_result.primary_feedback_addressed = primary_feedback_addressed
+            if feedback.from_agent in {"taylor", "sam"}:
+                self._primary_feedback_addressed_this_step = True
 
     def _is_feedback_addressed(self, feedback: Feedback, action: SkyPlanAction) -> bool:
-        """Determine if an action addresses a specific feedback item."""
-        # Check content includes relevant keywords
-        feedback_keywords = set(feedback.comment.lower().split())
-        action_keywords = set(action.content.lower().split()) | set(action.reasoning.lower().split())
+        """Determine if an action substantively addresses a specific feedback item."""
 
-        keyword_overlap = len(feedback_keywords.intersection(action_keywords))
-        total_keywords = len(feedback_keywords)
+        action_doc_type = ACTION_TO_DOCUMENT.get(action.action_type, "")
+        if feedback.document_type and action_doc_type and feedback.document_type != action_doc_type:
+            return False
 
-        # Consider addressed if >30% keywords overlap or action mentions feedback
-        return (keyword_overlap / max(total_keywords, 1) > 0.3 or
-                "feedback" in action.reasoning.lower() or
-                "addressing" in action.reasoning.lower())
+        action_text = f"{action.reasoning}\n{action.content}".lower()
+        feedback_text = feedback.comment.lower()
+        action_keywords = self._extract_keywords(action_text)
+        feedback_keywords = self._extract_keywords(feedback_text)
+        keyword_overlap = len(action_keywords & feedback_keywords)
+        keyword_ratio = keyword_overlap / max(len(feedback_keywords), 1)
+
+        acknowledged = any(
+            phrase in action.reasoning.lower()
+            for phrase in (
+                "addressing feedback",
+                "addressing taylor",
+                "addressing sam",
+                "review comments",
+                "requested revision",
+                "feedback",
+                "revision",
+            )
+        )
+        structural_fix = (
+            ("header" in feedback_text and "#" in action.content)
+            or ("paragraph" in feedback_text and "\n\n" in action.content)
+            or ("list" in feedback_text and any(marker in action.content for marker in ("- ", "* ", "1. ")))
+            or ("short" in feedback_text and len(action.content.strip()) >= 200)
+            or ("expand" in feedback_text and len(action.content.strip()) >= 200)
+            or ("detail" in feedback_text and len(action.content.strip()) >= 200)
+        )
+
+        return acknowledged or structural_fix or keyword_ratio >= 0.35
 
     def _calculate_document_quality(self, content: str, doc_type: str) -> float:
-        """Calculate document quality score (0-1)."""
-        # Simple quality calculation - could be enhanced
-        # Check length, structure, keywords
-        min_length = 50
-        if len(content) < min_length:
-            return 0.3
-        if len(content) < min_length * 2:
-            return 0.6
-        if "\n" in content and "#" in content:
-            return 0.8
-        return 1.0
+        """Calculate a deterministic quality score in the range [0.0, 1.0]."""
+
+        difficulty_targets = {
+            "easy": 180,
+            "medium": 320,
+            "hard": 480,
+        }
+        target_length = difficulty_targets.get(self._task_difficulty, 320)
+        content_lower = content.lower()
+
+        length_score = min(len(content.strip()) / target_length, 1.0)
+        header_score = 1.0 if "#" in content else 0.0
+        paragraph_score = 1.0 if "\n\n" in content else 0.0
+        list_score = 1.0 if any(marker in content for marker in ("- ", "* ", "1. ")) else 0.0
+
+        keyword_score = 1.0
+        if self._task_keywords:
+            hits = sum(keyword.lower() in content_lower for keyword in self._task_keywords)
+            keyword_score = min(hits / max(len(self._task_keywords), 1), 1.0)
+
+        doc_hint_bonus = 1.0 if doc_type.lower() in content_lower else 0.0
+
+        quality = (
+            0.35 * length_score
+            + 0.20 * header_score
+            + 0.15 * paragraph_score
+            + 0.15 * list_score
+            + 0.10 * keyword_score
+            + 0.05 * doc_hint_bonus
+        )
+        return max(0.0, min(quality, 1.0))
 
     def _generate_and_process_feedback(self, action: SkyPlanAction) -> None:
-        """Centralized feedback generation for an action."""
-        # Generate collaborative feedback
-        collaborative_fb = self._generate_collaborative_feedback(action)
-        if collaborative_fb:
-            self._feedback.append(collaborative_fb)
-            if self._last_action_result:
-                self._last_action_result.feedback_generated_count = 1
+        """Generate all feedback for an action and persist it once."""
 
-        # Generate validator feedback (Taylor-specific)
+        generated_feedback: list[Feedback] = []
+
+        collaborative_feedback = self._generate_collaborative_feedback(action)
+        if collaborative_feedback:
+            generated_feedback.append(collaborative_feedback)
+
         if action.agent_id == "taylor":
-            validation_feedback = self._generate_validation_feedback(action.agent_id)
-            self._feedback.extend(validation_feedback)
-            if self._last_action_result:
-                self._last_action_result.feedback_generated_count = len(validation_feedback)
+            generated_feedback.extend(self._generate_validation_feedback(action.agent_id, action))
 
-        # Generate strategic feedback (Sam-specific)
         if action.agent_id == "sam":
-            strategic_feedback = self._generate_strategic_feedback(action.agent_id)
-            self._feedback.extend(strategic_feedback)
-            if self._last_action_result:
-                self._last_action_result.feedback_generated_count = len(strategic_feedback)
+            generated_feedback.extend(self._generate_strategic_feedback(action.agent_id, action))
+
+        self._feedback.extend(generated_feedback)
+        self._feedback_generated_this_step = generated_feedback
+
+    def _extract_keywords(self, text: str) -> set[str]:
+        """Extract normalized keywords for lightweight consistency matching."""
+
+        return {
+            token
+            for token in TOKEN_PATTERN.findall(text.lower())
+            if token not in TOKEN_STOPWORDS
+        }
+
+    def get_unresolved_feedback(self) -> list[Feedback]:
+        """Expose unresolved feedback for observation summaries and tests."""
+
+        return [feedback for feedback in self._feedback if not feedback.resolved]

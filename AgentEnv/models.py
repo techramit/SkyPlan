@@ -11,7 +11,7 @@ The SkyPlan environment is a multi-agent planning system where specialized agent
 collaborate to transform an idea into structured planning documents.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Literal
 
@@ -46,6 +46,12 @@ class WorkflowConfig:
 
     PHASES: list[str] = ["research", "product", "architecture", "planning", "validation", "strategy"]
     DEFAULT_TOTAL_STEPS: int = 10
+
+
+def utc_timestamp() -> str:
+    """Return a stable UTC timestamp in the API's expected format."""
+
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 __all__ = [
@@ -87,6 +93,14 @@ class DocumentStatusConfig:
         "medium_chat_app": ["PRD", "ARCHITECTURE", "TASKS"],
         "hard_saas_platform": ["PRD", "ARCHITECTURE", "ROADMAP", "VALIDATION", "STRATEGY"],
     }
+
+    @classmethod
+    def get_required_approvals(cls, task_id: str | None) -> list[str]:
+        """Get the document types that must reach approval for a task."""
+
+        if not task_id:
+            return []
+        return cls.APPROVAL_REQUIREMENTS.get(task_id, [])
 
 
 # ============================================================================
@@ -395,7 +409,7 @@ class Document(BaseModel):
         Returns:
             A new Document instance
         """
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = utc_timestamp()
         return cls(
             type=doc_type,
             content=content,
@@ -414,7 +428,7 @@ class Document(BaseModel):
         """
         self.content = content
         self.author = author
-        self.updated_at = datetime.utcnow().isoformat() + "Z"
+        self.updated_at = utc_timestamp()
 
 
 # ============================================================================
@@ -484,7 +498,7 @@ class Feedback(BaseModel):
         Returns:
             A new Feedback instance
         """
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = utc_timestamp()
         return cls(
             from_agent=from_agent,
             to_agent=to_agent,
@@ -576,7 +590,7 @@ class LastAction(BaseModel):
         Returns:
             A new LastAction instance
         """
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = utc_timestamp()
         return cls(
             agent_id=agent_id,
             action_type=action_type,

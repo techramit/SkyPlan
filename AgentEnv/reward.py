@@ -27,18 +27,32 @@ from typing import Protocol, runtime_checkable
 
 from openai import OpenAI
 
-from .models import (
-    Document,
-    DocumentStatus,
-    DocumentStatusConfig,
-    SkyPlanAction,
-)
-from .workflow import (
-    get_all_agent_ids,
-    get_all_document_types,
-    get_required_documents,
-    get_workflow_entry,
-)
+try:
+    from .models import (
+        Document,
+        DocumentStatus,
+        DocumentStatusConfig,
+        SkyPlanAction,
+    )
+    from .workflow import (
+        get_all_agent_ids,
+        get_all_document_types,
+        get_required_documents,
+        get_workflow_entry,
+    )
+except ImportError:
+    from models import (
+        Document,
+        DocumentStatus,
+        DocumentStatusConfig,
+        SkyPlanAction,
+    )
+    from workflow import (
+        get_all_agent_ids,
+        get_all_document_types,
+        get_required_documents,
+        get_workflow_entry,
+    )
 
 
 # ============================================================================
@@ -365,6 +379,9 @@ class StepReward:
     teamwork_bonus: float
     penalty: float
     total: float
+    feedback_generation_reward: float = 0.0
+    feedback_resolution_reward: float = 0.0
+    document_approval_reward: float = 0.0
     quality_score: QualityScore | None = None
     teamwork_score: TeamworkScore | None = None
     penalty_score: PenaltyScore | None = None
@@ -1444,7 +1461,10 @@ class PenaltyCalculator(BaseCalculator):
             Penalty value (negative or zero)
         """
         # Get agent's allowed actions
-        from .workflow import get_allowed_actions
+        try:
+            from .workflow import get_allowed_actions
+        except ImportError:
+            from workflow import get_allowed_actions
 
         allowed_actions = get_allowed_actions(action.agent_id)
 
@@ -1455,26 +1475,21 @@ class PenaltyCalculator(BaseCalculator):
 
 
 # ============================================================================
-# Score Normalizer
+# Approval Bonus Calculator
 # ============================================================================
 
 
-    def _calculate_approval_bonus(self, action: SkyPlanAction, documents: dict[str, Document]) -> float:
-        """Calculate approval bonus for status-changing actions.
+class ApprovalBonusCalculator(BaseCalculator):
+    """Calculates bonuses for meaningful document approval transitions."""
 
-        Args:
-            action: The action taken
-            documents: All documents with current status
+    def calculate(self, action: SkyPlanAction, documents: dict[str, Document]) -> float:
+        """Calculate approval bonus for status-changing actions."""
 
-        Returns:
-            Approval bonus value (0.0 to APPROVAL_FINAL_BONUS)
-        """
-        # Check if action changes document status
+        del documents
         status_change = DocumentStatusConfig.STATUS_TRANSITIONS.get(action.action_type)
         if not status_change:
             return 0.0
 
-        # Determine bonus based on action type
         bonus_map = {
             "MARK_DOCUMENT_REVIEW": self.config.APPROVAL_MARK_REVIEW_BONUS,
             "APPROVE_DOCUMENT": self.config.APPROVAL_APPROVE_BONUS,
@@ -1484,6 +1499,11 @@ class PenaltyCalculator(BaseCalculator):
         }
 
         return bonus_map.get(action.action_type, 0.0)
+
+
+# ============================================================================
+# Score Normalizer
+# ============================================================================
 
 class ScoreNormalizer:
     """Normalizes raw reward scores to [0.0, 1.0] range."""
@@ -1577,7 +1597,6 @@ class RewardCalculator:
         feedback_resolved: list | None = None,
         new_approvals: list | None = None,
     ) -> StepReward:
-        """Calculate reward for a single step."""
         """Calculate reward for a single step.
 
         Args:
@@ -1619,14 +1638,25 @@ class RewardCalculator:
         )
         penalty = penalty_score.total
 
-        # Calculate total step reward
-        # Calculate approval bonus for status-changing actions
-        approval_bonus = self._calculate_approval_bonus(action, documents)
-        
-        # Sum all reward components
-        total = quality_bonus + teamwork_bonus + penalty + approval_bonus + feedback_generation_reward + feedback_resolution_reward + document_approval_reward
-
-        # Calculate feedback generation reward if feedback was generated\n        feedback_generation_reward = 0.0\n        if feedback_generated:\n            feedback_generation_reward = self.calculate_feedback_generation_reward(feedback_generated)\n\n        # Calculate feedback resolution reward if feedback was resolved\n        feedback_resolution_reward = 0.0\n        if feedback_resolved:\n            feedback_resolution_reward = self.calculate_feedback_resolution_reward(feedback_resolved)\n\n        # Calculate document approval reward if new approvals occurred\n        document_approval_reward = 0.0\n        if new_approvals:\n            document_approval_reward = self.calculate_document_approval_reward(new_approvals)
+        approval_bonus = self.approval_calculator.calculate(action, documents)
+        feedback_generation_reward = self.calculate_feedback_generation_reward(
+            feedback_generated or []
+        )
+        feedback_resolution_reward = self.calculate_feedback_resolution_reward(
+            feedback_resolved or []
+        )
+        document_approval_reward = self.calculate_document_approval_reward(
+            new_approvals or []
+        )
+        total = (
+            quality_bonus
+            + teamwork_bonus
+            + penalty
+            + approval_bonus
+            + feedback_generation_reward
+            + feedback_resolution_reward
+            + document_approval_reward
+        )
 
         # Create step reward
         step_reward = StepReward(
@@ -1634,13 +1664,12 @@ class RewardCalculator:
             teamwork_bonus=teamwork_bonus,
             penalty=penalty,
             total=total,
+            feedback_generation_reward=feedback_generation_reward,
+            feedback_resolution_reward=feedback_resolution_reward,
+            document_approval_reward=document_approval_reward,
             quality_score=quality_score,
             teamwork_score=teamwork_score,
             penalty_score=penalty_score,
-
-		feedback_generation_reward=feedback_generation_reward,
-		feedback_resolution_reward=feedback_resolution_reward,
-		document_approval_reward=document_approval_reward
         )
 
         # Track for episode
@@ -1748,6 +1777,15 @@ class RewardCalculator:
             "quality_bonus": sum(step.quality_bonus for step in self._step_rewards),
             "teamwork_bonus": sum(step.teamwork_bonus for step in self._step_rewards),
             "penalty": sum(step.penalty for step in self._step_rewards),
+            "feedback_generation_reward": sum(
+                step.feedback_generation_reward for step in self._step_rewards
+            ),
+            "feedback_resolution_reward": sum(
+                step.feedback_resolution_reward for step in self._step_rewards
+            ),
+            "document_approval_reward": sum(
+                step.document_approval_reward for step in self._step_rewards
+            ),
             "completion_bonus": completion_bonus,
         }
 
