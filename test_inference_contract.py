@@ -97,16 +97,16 @@ def test_main_logs_end_after_env_close(monkeypatch):
         events.append("run")
         return {"success": True, "steps": 1, "rewards": [0.5]}
 
-    monkeypatch.setattr(inference, "HF_TOKEN", "test-token")
+    monkeypatch.setattr(inference, "load_env_file", lambda path=".env": None)
+    monkeypatch.setenv("HF_TOKEN", "test-token")
     monkeypatch.setattr(inference, "OpenAI", lambda **kwargs: object())
-    monkeypatch.setattr(inference, "resolve_task_ids", lambda: ["easy_user_authentication"])
     monkeypatch.setattr(inference.AgentenvEnv, "from_docker_image", staticmethod(fake_from_docker_image))
     monkeypatch.setattr(inference, "run_episode", fake_run_episode)
     monkeypatch.setattr(inference, "log_start", lambda **kwargs: events.append("start"))
     monkeypatch.setattr(inference, "log_end", lambda **kwargs: events.append("end"))
     monkeypatch.setattr(inference, "log_error", lambda message: events.append(f"error:{message}"))
 
-    asyncio.run(inference.main())
+    asyncio.run(inference.main(["--task", "easy_user_authentication"]))
 
     assert events.index("close") < events.index("end")
 
@@ -128,16 +128,46 @@ def test_main_still_logs_end_when_episode_execution_raises(monkeypatch):
         del client, env, task_id, task_config
         raise RuntimeError("episode failed")
 
-    monkeypatch.setattr(inference, "HF_TOKEN", "test-token")
+    monkeypatch.setattr(inference, "load_env_file", lambda path=".env": None)
+    monkeypatch.setenv("HF_TOKEN", "test-token")
     monkeypatch.setattr(inference, "OpenAI", lambda **kwargs: object())
-    monkeypatch.setattr(inference, "resolve_task_ids", lambda: ["easy_user_authentication"])
     monkeypatch.setattr(inference.AgentenvEnv, "from_docker_image", staticmethod(fake_from_docker_image))
     monkeypatch.setattr(inference, "run_episode", fake_run_episode)
     monkeypatch.setattr(inference, "log_start", lambda **kwargs: events.append("start"))
     monkeypatch.setattr(inference, "log_end", lambda **kwargs: events.append("end"))
     monkeypatch.setattr(inference, "log_error", lambda message: events.append(f"error:{message}"))
 
-    asyncio.run(inference.main())
+    asyncio.run(inference.main(["--task", "easy_user_authentication"]))
 
     assert "end" in events
     assert events.index("close") < events.index("end")
+
+
+def test_load_env_file_populates_missing_variables(tmp_path, monkeypatch):
+    """Local .env loading should populate unset variables without overwriting explicit shell env."""
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "HF_TOKEN=from-file\nMODEL_NAME=file-model\nSKYPLAN_TASK=medium_chat_app\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+    monkeypatch.setenv("SKYPLAN_TASK", "easy_user_authentication")
+
+    inference.load_env_file(env_file)
+
+    assert inference.get_runtime_config().hf_token == "from-file"
+    assert inference.get_runtime_config().model_name == "file-model"
+    assert inference.get_runtime_config().task_selector == "easy_user_authentication"
+
+
+def test_parse_cli_task_override_wins_over_environment(monkeypatch):
+    """--task should override SKYPLAN_TASK for direct script invocation."""
+
+    monkeypatch.setenv("HF_TOKEN", "test-token")
+    monkeypatch.setenv("SKYPLAN_TASK", "easy_user_authentication")
+
+    runtime_config = inference.get_runtime_config("all")
+
+    assert inference.resolve_task_ids(runtime_config.task_selector) == list(inference.TASKS.keys())

@@ -7,9 +7,12 @@ the hackathon-required stdout format for each task episode.
 """
 
 import asyncio
+import argparse
 import json
 import os
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from openai import OpenAI
@@ -19,16 +22,79 @@ from AgentEnv import SkyPlanAction, SkyPlanObservation, TASKS, get_all_agent_ids
 from AgentEnv.client import AgentenvEnv
 from AgentEnv.workflow import get_required_documents
 
-
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
-IMAGE_NAME = os.getenv("IMAGE_NAME", "AgentEnv-env:latest")
-
-TASK_SELECTOR = os.getenv("SKYPLAN_TASK", "all").strip()
-TEMPERATURE = float(os.getenv("SKYPLAN_TEMPERATURE", "0.0"))
-MAX_TOKENS = int(os.getenv("SKYPLAN_MAX_TOKENS", "2000"))
 BENCHMARK = "skyplan"
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """Runtime configuration for the inference runner."""
+
+    api_base_url: str
+    model_name: str
+    hf_token: str
+    image_name: str
+    task_selector: str
+    temperature: float
+    max_tokens: int
+
+
+def load_env_file(path: str | Path = ".env") -> None:
+    """Load simple KEY=VALUE pairs from a local .env file if present."""
+
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        os.environ.setdefault(key, value)
+
+
+def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse supported command-line arguments."""
+
+    parser = argparse.ArgumentParser(description="Run SkyPlan inference episodes.")
+    parser.add_argument(
+        "--task",
+        default=None,
+        help="Task id to run, or 'all' to run every task. Defaults to SKYPLAN_TASK or all.",
+    )
+    return parser.parse_args(argv)
+
+
+def get_runtime_config(task_override: str | None = None) -> RuntimeConfig:
+    """Resolve runtime configuration after environment variables are loaded."""
+
+    hf_token = (
+        os.getenv("HF_TOKEN")
+        or os.getenv("API_KEY")
+        or os.getenv("SKYPLAN_LLM_API_KEY")
+    )
+    if not hf_token:
+        raise ValueError(
+            "HF_TOKEN or API_KEY environment variable is required. "
+            "Set it in your shell or local .env file."
+        )
+
+    return RuntimeConfig(
+        api_base_url=os.getenv("API_BASE_URL", "https://router.huggingface.co/v1"),
+        model_name=os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct"),
+        hf_token=hf_token,
+        image_name=os.getenv("IMAGE_NAME", "skyplan-env"),
+        task_selector=(task_override or os.getenv("SKYPLAN_TASK", "all")).strip(),
+        temperature=float(os.getenv("SKYPLAN_TEMPERATURE", "0.0")),
+        max_tokens=int(os.getenv("SKYPLAN_MAX_TOKENS", "2000")),
+    )
 
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -191,6 +257,7 @@ def get_model_message(
     agent_id: str,
     observation: SkyPlanObservation,
     task_description: str,
+    runtime_config: RuntimeConfig,
 ) -> dict[str, str]:
     """Get the current agent's action proposal from the model."""
 
@@ -199,13 +266,13 @@ def get_model_message(
 
     try:
         completion = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=runtime_config.model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
+            temperature=runtime_config.temperature,
+            max_tokens=runtime_config.max_tokens,
             response_format={"type": "json_object"},
         )
         response_text = completion.choices[0].message.content or ""
@@ -230,6 +297,7 @@ async def run_episode(
     env: AgentenvEnv,
     task_id: str,
     task_config: Any,
+    runtime_config: RuntimeConfig,
 ) -> dict[str, Any]:
     """Run a single task episode end to end."""
 
@@ -261,6 +329,7 @@ async def run_episode(
             agent_id=agent_id,
             observation=observation,
             task_description=task_config.description,
+            runtime_config=runtime_config,
         )
         action_data["agent_id"] = agent_id
 
@@ -320,39 +389,42 @@ async def run_episode(
     return {"success": success, "steps": steps_taken, "rewards": rewards}
 
 
-def resolve_task_ids() -> list[str]:
+def resolve_task_ids(task_selector: str) -> list[str]:
     """Resolve the task selector into concrete task ids."""
 
-    if not TASK_SELECTOR or TASK_SELECTOR.lower() == "all":
+    if not task_selector or task_selector.lower() == "all":
         return list(TASKS.keys())
-    if TASK_SELECTOR not in TASKS:
-        raise ValueError(f"Unknown task: {TASK_SELECTOR}")
-    return [TASK_SELECTOR]
+    if task_selector not in TASKS:
+        raise ValueError(f"Unknown task: {task_selector}")
+    return [task_selector]
 
 
-async def main() -> None:
+async def main(argv: list[str] | None = None) -> None:
     """Execute the configured task set against the local environment image."""
 
-    if not HF_TOKEN:
-        log_error("HF_TOKEN or API_KEY environment variable is required")
-        raise SystemExit(1)
+    load_env_file()
+    args = parse_cli_args(argv)
 
     try:
-        task_ids = resolve_task_ids()
+        runtime_config = get_runtime_config(args.task)
+        task_ids = resolve_task_ids(runtime_config.task_selector)
     except ValueError as exc:
         log_error(str(exc))
         raise SystemExit(1) from exc
 
-    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+    client = OpenAI(
+        base_url=runtime_config.api_base_url,
+        api_key=runtime_config.hf_token,
+    )
     for task_id in task_ids:
         task_config = TASKS[task_id]
         env: AgentenvEnv | None = None
         result: dict[str, Any] = {"success": False, "steps": 0, "rewards": []}
 
-        log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
+        log_start(task=task_id, env=BENCHMARK, model=runtime_config.model_name)
         try:
-            env = await AgentenvEnv.from_docker_image(IMAGE_NAME)
-            result = await run_episode(client, env, task_id, task_config)
+            env = await AgentenvEnv.from_docker_image(runtime_config.image_name)
+            result = await run_episode(client, env, task_id, task_config, runtime_config)
         except Exception as exc:
             log_error(f"Failed to execute task {task_id}: {exc}")
         finally:
@@ -369,4 +441,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(sys.argv[1:]))
