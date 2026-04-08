@@ -28,3 +28,4 @@ logs/
 
 # Extra
 .agents/
+*.egg-info/
