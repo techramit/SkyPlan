@@ -193,6 +193,9 @@ class SkyPlanEnvironment(Environment):
         # 3. The Filing: Save document to Shared Folder
         self._file_document(action)
 
+        # 3.5. Generate and process feedback
+        self._generate_and_process_feedback(action)
+
         # 4. The Performance Review: Calculate reward using the new reward system
         step_reward = self._reward_calculator.calculate_step_reward(
             action=action,
@@ -223,6 +226,9 @@ class SkyPlanEnvironment(Environment):
             result="success",
             message=f"{action.action_type} completed successfully",
         )
+
+        # 7.5. Process feedback resolutions after action completion
+        self._process_feedback_resolutions(action.agent_id, action)
 
         # Get handoff message for the next agent
         handoff_msg = get_handoff_message(action.agent_id)
@@ -547,3 +553,251 @@ class SkyPlanEnvironment(Environment):
             len(WorkflowConfig.PHASES) - 1,
         )
         return WorkflowConfig.PHASES[phase_index]
+
+    # ============================================================================
+    # Feedback Generation and Processing Methods
+    # ============================================================================
+
+    def _generate_collaborative_feedback(self, action: SkyPlanAction) -> Feedback | None:
+        """Generate collaborative feedback based on document quality.
+
+        Args:
+            action: The action to evaluate
+
+        Returns:
+            Feedback object or None if no feedback needed
+        """
+        # Inline configuration since FeedbackConfig caused issues
+        ENABLE_COLLABORATIVE_FEEDBACK = True
+        COLLABORATIVE_FEEDBACK_THRESHOLD = 0.6
+
+        if not ENABLE_COLLABORATIVE_FEEDBACK:
+            return None
+
+        doc_type = ACTION_TO_DOCUMENT.get(action.action_type)
+        if not doc_type:
+            return None
+
+        # Calculate quality score
+        quality_score = self._calculate_document_quality(action.content, doc_type)
+
+        if quality_score < COLLABORATIVE_FEEDBACK_THRESHOLD:
+            return Feedback.create(
+                from_agent=action.agent_id,
+                to_agent="",  # General feedback
+                document_type=doc_type,
+                feedback_type="suggestion",
+                comment=f"Document quality score ({quality_score:.2f}) suggests improvements needed. Consider expanding content with specific examples and technical details."
+            )
+        return None
+
+    def _generate_validation_feedback(self, agent_id: str) -> list[Feedback]:
+        """Generate comprehensive validation feedback from Taylor.
+
+        Args:
+            agent_id: Agent being validated (should be "taylor")
+
+        Returns:
+            List of Feedback objects
+        """
+        # Inline configuration
+        ENABLE_VALIDATOR_FEEDBACK = True
+        TAYLOR_APPROVAL_THRESHOLD = 0.7
+
+        if not ENABLE_VALIDATOR_FEEDBACK or agent_id != "taylor":
+            return []
+
+        feedback_list = []
+        required_docs = get_required_documents(agent_id)
+
+        for doc_type in required_docs:
+            doc = self._documents.get(doc_type)
+            if not doc or doc.author == "taylor":  # Don't self-review
+                continue
+
+            # Calculate quality score
+            quality_score = self._calculate_document_quality(doc.content, doc_type)
+
+            # Identify specific issues
+            issues = self._identify_document_issues(doc, quality_score)
+
+            if issues:
+                # Choose feedback type based on severity
+                if quality_score < 0.4:
+                    feedback_type = "concern"
+                elif quality_score < 0.6:
+                    feedback_type = "critique"
+                else:
+                    feedback_type = "suggestion"
+
+                feedback = Feedback.create(
+                    from_agent="taylor",
+                    to_agent=doc.author,
+                    document_type=doc_type,
+                    feedback_type=feedback_type,
+                    comment=f"Validation feedback: {issues}"
+                )
+                feedback_list.append(feedback)
+
+                # Update document status based on quality
+                if quality_score >= TAYLOR_APPROVAL_THRESHOLD:
+                    doc.status = "approved"
+                elif quality_score >= 0.5:
+                    doc.status = "in_review"
+                else:
+                    doc.status = "rejected"
+
+        return feedback_list
+
+    def _generate_strategic_feedback(self, agent_id: str) -> list[Feedback]:
+        """Generate strategic feedback from CEO Sam.
+
+        Args:
+            agent_id: Should be "sam"
+
+        Returns:
+            List of Feedback objects
+        """
+        # Inline configuration
+        ENABLE_STRATEGIC_FEEDBACK = True
+
+        if not ENABLE_STRATEGIC_FEEDBACK or agent_id != "sam":
+            return []
+
+        feedback_list = []
+        required_docs = get_required_documents(agent_id)
+
+        # Check for missing documents
+        missing_docs = [d for d in required_docs if d not in self._documents]
+        if missing_docs:
+            feedback_list.append(Feedback.create(
+                from_agent="sam",
+                to_agent="",
+                document_type="STRATEGY",
+                feedback_type="concern",
+                comment=f"Missing required documents: {', '.join(missing_docs)}"
+            ))
+
+        # Check document consistency
+        consistency_score = self._check_document_consistency()
+        if consistency_score < 0.7:
+            feedback_list.append(Feedback.create(
+                from_agent="sam",
+                to_agent="taylor",
+                document_type="STRATEGY",
+                feedback_type="critique",
+                comment=f"Document consistency low ({consistency_score:.2f}). Taylor, please review for alignment and identify discrepancies."
+            ))
+
+        # Check approval status
+        approved_count = sum(1 for doc in self._documents.values() if doc.status == "approved")
+        if approved_count < len(required_docs):
+            feedback_list.append(Feedback.create(
+                from_agent="sam",
+                to_agent="",
+                document_type="STRATEGY",
+                feedback_type="request_revision",
+                comment=f"Only {approved_count}/{len(required_docs)} documents approved. All documents must reach 'approved' status before final strategic approval."
+            ))
+
+        return feedback_list
+
+    def _identify_document_issues(self, doc: Document, quality_score: float) -> str:
+        """Identify specific issues in a document for feedback."""
+        issues = []
+
+        if len(doc.content) < 200:
+            issues.append("content too short")
+        if "\n\n" not in doc.content:  # No paragraphs
+            issues.append("lack of structured paragraphs")
+        if "#" not in doc.content:  # No headers
+            issues.append("missing section headers")
+
+        return "; ".join(issues)
+
+    def _check_document_consistency(self) -> float:
+        """Check consistency across all planning documents."""
+        # Simple consistency check - could be enhanced
+        return 0.8  # Placeholder for now
+
+    def _process_feedback_resolutions(self, agent_id: str, action: SkyPlanAction) -> None:
+        """Check if current action addresses previous feedback and mark as resolved."""
+        # Inline configuration
+        ENABLE_FEEDBACK_RESOLUTION = True
+
+        if not ENABLE_FEEDBACK_RESOLUTION:
+            return
+
+        # Get unresolved feedback targeting this agent
+        unresolved_feedback = [
+            fb for fb in self._feedback
+            if not fb.resolved and (fb.to_agent == agent_id or fb.to_agent == "")
+        ]
+
+        resolved_count = 0
+        primary_feedback_addressed = False
+
+        for feedback in unresolved_feedback:
+            if self._is_feedback_addressed(feedback, action):
+                feedback.resolved = True
+                feedback.resolution_timestamp = datetime.utcnow().isoformat() + "Z"
+                feedback.addressed_by = agent_id
+                resolved_count += 1
+
+                if feedback.from_agent in ["taylor", "sam"]:
+                    primary_feedback_addressed = True
+
+        # Update last action result
+        if self._last_action_result:
+            self._last_action_result.resolved_feedback_count = resolved_count
+            self._last_action_result.primary_feedback_addressed = primary_feedback_addressed
+
+    def _is_feedback_addressed(self, feedback: Feedback, action: SkyPlanAction) -> bool:
+        """Determine if an action addresses a specific feedback item."""
+        # Check content includes relevant keywords
+        feedback_keywords = set(feedback.comment.lower().split())
+        action_keywords = set(action.content.lower().split()) | set(action.reasoning.lower().split())
+
+        keyword_overlap = len(feedback_keywords.intersection(action_keywords))
+        total_keywords = len(feedback_keywords)
+
+        # Consider addressed if >30% keywords overlap or action mentions feedback
+        return (keyword_overlap / max(total_keywords, 1) > 0.3 or
+                "feedback" in action.reasoning.lower() or
+                "addressing" in action.reasoning.lower())
+
+    def _calculate_document_quality(self, content: str, doc_type: str) -> float:
+        """Calculate document quality score (0-1)."""
+        # Simple quality calculation - could be enhanced
+        # Check length, structure, keywords
+        min_length = 50
+        if len(content) < min_length:
+            return 0.3
+        if len(content) < min_length * 2:
+            return 0.6
+        if "\n" in content and "#" in content:
+            return 0.8
+        return 1.0
+
+    def _generate_and_process_feedback(self, action: SkyPlanAction) -> None:
+        """Centralized feedback generation for an action."""
+        # Generate collaborative feedback
+        collaborative_fb = self._generate_collaborative_feedback(action)
+        if collaborative_fb:
+            self._feedback.append(collaborative_fb)
+            if self._last_action_result:
+                self._last_action_result.feedback_generated_count = 1
+
+        # Generate validator feedback (Taylor-specific)
+        if action.agent_id == "taylor":
+            validation_feedback = self._generate_validation_feedback(action.agent_id)
+            self._feedback.extend(validation_feedback)
+            if self._last_action_result:
+                self._last_action_result.feedback_generated_count = len(validation_feedback)
+
+        # Generate strategic feedback (Sam-specific)
+        if action.agent_id == "sam":
+            strategic_feedback = self._generate_strategic_feedback(action.agent_id)
+            self._feedback.extend(strategic_feedback)
+            if self._last_action_result:
+                self._last_action_result.feedback_generated_count = len(strategic_feedback)

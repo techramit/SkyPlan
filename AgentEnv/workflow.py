@@ -402,3 +402,63 @@ def get_workflow_length() -> int:
         Number of agents in the workflow
     """
     return len(WORKFLOW)
+
+
+# ============================================================================
+# Feedback Configuration
+# ============================================================================
+
+# Feedback types for generation
+COLLABORATIVE_FEEDBACK_TYPES = [
+    "suggestion",
+    "approval",
+    "question",
+    "concern"
+]
+
+VALIDATOR_FEEDBACK_TYPES = [
+    "critique",
+    "concern",
+    "request_revision"
+]
+
+STRATEGIC_FEEDBACK_TYPES = [
+    "concern",
+    "request_revision"
+]
+
+# Feedback reward weights
+FEEDBACK_GENERATION_REWARDS = {
+    "collaborative": 0.02,
+    "validator": 0.08,
+    "strategic": 0.10
+}
+
+FEEDBACK_RESOLUTION_REWARDS = {
+    "primary": 0.15,  # Taylor/Sam feedback
+    "peer": 0.05      # Peer feedback
+}
+
+DOCUMENT_APPROVAL_REWARDS = {
+    "taylor": 0.15,
+    "sam": 0.15,
+    "final": 0.50
+}
+
+
+def map_feedback_type_to_reward(feedback_type: str, from_agent: str) -> float:
+    """Map feedback type to reward value.
+
+    Args:
+        feedback_type: The feedback type from FeedbackType enum
+        from_agent: Agent ID that generated the feedback
+
+    Returns:
+        Reward value for generating this feedback
+    """
+    if from_agent == "sam":
+        return FEEDBACK_GENERATION_REWARDS["strategic"]
+    elif from_agent == "taylor":
+        return FEEDBACK_GENERATION_REWARDS["validator"]
+    else:
+        return FEEDBACK_GENERATION_REWARDS["collaborative"]
