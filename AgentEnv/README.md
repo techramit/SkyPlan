@@ -17,11 +17,11 @@ SkyPlan is an OpenEnv environment for autonomous product planning. It simulates 
 
 ## Core models
 
-The typed OpenEnv models live in [models.py](/D:/Docs/Hackathons/Meta%20Hackathon%202k26/AgentEnv/models.py):
+The typed OpenEnv models live in [models.py](models.py):
 - `SkyPlanAction`: `agent_id`, `action_type`, `reasoning`, `content`
 - `SkyPlanObservation`: task state, documents, feedback, last action result, status summary, reward, and done flag
 
-The workflow is enforced by [workflow.py](/D:/Docs/Hackathons/Meta%20Hackathon%202k26/AgentEnv/workflow.py), and the environment implementation is in [server/AgentEnv_environment.py](/D:/Docs/Hackathons/Meta%20Hackathon%202k26/AgentEnv/server/AgentEnv_environment.py).
+The workflow is enforced by [workflow.py](workflow.py), and the environment implementation is in [server/AgentEnv_environment.py](server/AgentEnv_environment.py).
 
 ## Environment behavior
 
@@ -37,7 +37,7 @@ Documents transition through `draft`, `in_review`, `approved`, and `rejected`, a
 
 ## Tasks
 
-Three benchmark tasks are defined in [tasks.py](/D:/Docs/Hackathons/Meta%20Hackathon%202k26/AgentEnv/tasks.py):
+Three benchmark tasks are defined in [tasks.py](tasks.py):
 - `easy_user_authentication`
 - `medium_chat_app`
 - `hard_saas_platform`
@@ -62,10 +62,10 @@ Validate the environment:
 openenv validate
 ```
 
-Run the feedback workflow tests from the repo root:
+Run the core test suite from the repo root:
 
 ```bash
-uv run --project AgentEnv pytest test_feedback_integration.py -q
+uv run --project AgentEnv pytest test_feedback_integration.py test_grading_quality.py test_inference_contract.py -q
 ```
 
 ## Docker
@@ -73,15 +73,15 @@ uv run --project AgentEnv pytest test_feedback_integration.py -q
 Build:
 
 ```bash
-docker build -t AgentEnv-env:latest -f server/Dockerfile .
+docker build -t skyplan-env .
 ```
 
 Run:
 
 ```bash
-docker run -p 8000:8000 AgentEnv-env:latest
+docker run -p 8000:8000 skyplan-env
 ```
 
 ## Baseline inference
 
-The baseline runner is [../inference.py](/D:/Docs/Hackathons/Meta%20Hackathon%202k26/inference.py). It uses the OpenAI client, supports all three tasks, and emits the hackathon-required stdout line format.
+The baseline runner is [../inference.py](../inference.py). It uses the OpenAI client, supports all three tasks, emits the hackathon-required stdout line format, and closes each environment episode before emitting `[END]`.
