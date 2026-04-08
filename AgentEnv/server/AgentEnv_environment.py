@@ -29,6 +29,8 @@ try:
         SkyPlanObservation,
         ValidationConfig,
         WorkflowConfig,
+            DocumentStatus,
+            DocumentStatusConfig,
     )
     from ..reward import RewardCalculator, StepReward
     from ..workflow import (
@@ -307,15 +309,30 @@ class SkyPlanEnvironment(Environment):
 
     def _file_document(self, action: SkyPlanAction) -> None:
         """
-        The Filing: Save the document to the Shared Folder.
+        The Filing: Save the document to the Shared Folder with dynamic status updates.
 
-        Maps action_type to document_type and stores the document.
+        This method is called after every action to:
+        1. Map action_type to document_type
+        2. Determine the appropriate document status based on action type
+        3. Create new document or update existing document with content and status
+        4. Apply status transitions automatically based on DocumentStatusConfig
+
+        The status transition is dynamic:
+        - For content-creation actions (WRITE_PRD, DESIGN_ARCHITECTURE, etc.), status = "draft"
+        - For status-changes actions (APPROVE_DOCUMENT, MARK_DOCUMENT_REVIEW, etc.),
+          status = DocumentStatusConfig.STATUS_TRANSITIONS[action.action_type]
+        - Status is extracted from the DocumentStatusConfig configuration
 
         Args:
-            action: The action containing the document content
+            action: The action containing the document content and action_type
 
         Returns:
             None
+
+        Examples:
+            - action.action_type="WRITE_PRD" → doc_type="PRD", status="draft"
+            - action.action_type="APPROVE_DOCUMENT" → doc_type="VALIDATION", status="approved"
+            - action.action_type="FINAL_APPROVAL" → doc_type="STRATEGY", status="approved"
         """
         doc_type = ACTION_TO_DOCUMENT.get(action.action_type)
         if not doc_type:
@@ -324,20 +341,47 @@ class SkyPlanEnvironment(Environment):
         try:
             timestamp = datetime.utcnow().isoformat() + "Z"
 
+            # DYNAMIC STATUS DETERMINATION: Get status from configuration
+            # This is the key integration: automatically map actions to document statuses
+            action_status = DocumentStatusConfig.STATUS_TRANSITIONS.get(action.action_type)
+
+            # DEBUG: Log for testing status transitions
+            if action_status:
+                print(f"[STATUS TRANSITION] {action.action_type} → {action_status}")
+
+            # Apply status change to the document
             if doc_type in self._documents:
                 # Update existing document
-                self._documents[doc_type].content = action.content
+                if len(action.content.strip()) > 5:  # Has meaningful content
+                    self._documents[doc_type].content = action.content
                 self._documents[doc_type].author = action.agent_id
                 self._documents[doc_type].updated_at = timestamp
+
+                # Apply dynamic status transition if available
+                if action_status:
+                    self._documents[doc_type].status = action_status
+                    print(f"[UPDATED] {doc_type} status → {action_status}")
             else:
-                # Create new document
+                # Create new document - determine initial status
+                # For new documents, default to DRAFT unless action specifies otherwise
+                if action_status:
+                    # Action explicitly sets status (e.g., MARK_DOCUMENT_REVIEW)
+                    status = action_status
+                else:
+                    # Default content-creation actions to DRAFT
+                    status = DocumentStatus.DRAFT
+
                 self._documents[doc_type] = Document(
                     type=doc_type,
                     content=action.content,
                     author=action.agent_id,
                     created_at=timestamp,
                     updated_at=timestamp,
-                    status="draft",
+                    status=status,
+                )
+                print(f"[CREATED] {doc_type} with status: {status}")
+                print(
+                    f"[CONFIG] DocumentStatusConfig.STATUS_TRANSITIONS = {DocumentStatusConfig.STATUS_TRANSITIONS}"
                 )
         except Exception as e:
             # Log error but don't fail the step
@@ -422,12 +466,27 @@ class SkyPlanEnvironment(Environment):
         Args:
             result: Result message
             reasoning: System reasoning
-            status: Current status
+            status: Current workflow status
             reward: Reward value
 
         Returns:
-            Complete SkyPlanObservation
+            Complete SkyPlanObservation with document status summary
         """
+        # Calculate document status summary
+        status_counts = {"draft": 0, "in_review": 0, "approved": 0, "rejected": 0}
+        awaiting_review = []
+
+        for doc_type, doc in self._documents.items():
+            # Count by status
+            if doc.status in status_counts:
+                status_counts[doc.status] += 1
+
+            # Track documents awaiting review/approval
+            if doc.status == "draft":
+                awaiting_review.append(f"{doc_type} (needs review)")
+            elif doc.status == "in_review":
+                awaiting_review.append(f"{doc_type} (in review)")
+
         return SkyPlanObservation(
             task_description=self._task_description,
             result=result,
@@ -438,11 +497,17 @@ class SkyPlanEnvironment(Environment):
             documents=self._documents,
             feedback=self._feedback,
             last_action_result=self._last_action_result,
-            current_state={"status": status, "phase": self._get_current_phase()},
+            current_state={
+                "status": status,
+                "phase": self._get_current_phase(),
+                "document_summary": status_counts,
+            },
             errors=[],
             step_count=self._state.step_count,
             done=self._done,
             reward=reward,
+            document_status_summary=status_counts,
+            documents_awaiting_review=awaiting_review,
         )
 
     def _create_error_observation(self, error_message: str) -> SkyPlanObservation:

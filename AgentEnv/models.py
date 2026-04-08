@@ -48,6 +48,47 @@ class WorkflowConfig:
     DEFAULT_TOTAL_STEPS: int = 10
 
 
+__all__ = [
+    "Document",
+    "DocumentStatus",
+    "DocumentType",
+    "LastAction",
+    "ActionResult",
+    "DocumentStatusConfig",
+    "SkyPlanAction",
+    "SkyPlanObservation",
+    "RewardConfig",
+    "WorkflowConfig",
+    "ValidationConfig",
+]
+
+class DocumentStatusConfig:
+    """Configuration for document status transition rules.
+    
+    Attributes:
+    STATUS_TRANSITIONS: Map of action to status change
+    APPROVAL_REQUIREMENTS: Which documents need approval per task
+    """
+    
+    # Map actions to status changes
+    STATUS_TRANSITIONS: dict[str, str] = {
+        # Taylor actions that change document status
+        "MARK_DOCUMENT_REVIEW": "in_review",
+        "APPROVE_DOCUMENT": "approved",
+        "REJECT_DOCUMENT": "rejected",
+        # Sam actions that change document status
+        "APPROVE_ALL_DOCUMENTS": "approved",
+        "FINAL_APPROVAL": "approved",
+    }
+    
+    # Which documents require approval before final submission
+    APPROVAL_REQUIREMENTS: dict[str, list[str]] = {
+        "easy_user_authentication": ["PRD", "TRD"],
+        "medium_chat_app": ["PRD", "ARCHITECTURE", "TASKS"],
+        "hard_saas_platform": ["PRD", "ARCHITECTURE", "ROADMAP", "VALIDATION", "STRATEGY"],
+    }
+
+
 # ============================================================================
 # Action to Document Mapping
 # ============================================================================
@@ -84,12 +125,17 @@ ACTION_TO_DOCUMENT: dict[str, str] = {
     "VALIDATE_CLAIMS": "VALIDATION",
     "IDENTIFY_RISKS": "VALIDATION",
     "SCORE_PLAN": "VALIDATION",
+    "MARK_DOCUMENT_REVIEW": "VALIDATION",
+    "APPROVE_DOCUMENT": "VALIDATION",
+    "REJECT_DOCUMENT": "VALIDATION",
     # Sam (CEO) - STRATEGY actions
     "SET_DIRECTION": "STRATEGY",
     "REVIEW_PLAN": "STRATEGY",
     "APPROVE_STRATEGY": "STRATEGY",
     "PRIORITIZE_OBJECTIVES": "STRATEGY",
     "REQUEST_REVISION": "STRATEGY",
+    "APPROVE_ALL_DOCUMENTS": "STRATEGY",
+    "FINAL_APPROVAL": "STRATEGY",
 }
 
 
