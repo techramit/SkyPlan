@@ -18,6 +18,12 @@ from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
 try:
+    from ..content_utils import (
+        count_paragraph_blocks,
+        has_markdown_headers,
+        has_markdown_lists,
+        keyword_coverage_ratio,
+    )
     from ..models import (
         ACTION_TO_DOCUMENT,
         Document,
@@ -41,6 +47,12 @@ try:
         get_required_documents,
     )
 except ImportError:
+    from content_utils import (
+        count_paragraph_blocks,
+        has_markdown_headers,
+        has_markdown_lists,
+        keyword_coverage_ratio,
+    )
     from models import (
         ACTION_TO_DOCUMENT,
         Document,
@@ -912,13 +924,13 @@ class SkyPlanEnvironment(Environment):
 
         if content_length < 200:
             issues.append("content too short")
-        if "#" not in doc.content:
+        if not has_markdown_headers(doc.content):
             issues.append("missing section headers")
-        if "\n\n" not in doc.content:
+        if count_paragraph_blocks(doc.content) < 2:
             issues.append("lack of structured paragraphs")
-        if not any(marker in doc.content for marker in ("- ", "* ", "1. ")):
+        if not has_markdown_lists(doc.content):
             issues.append("missing actionable lists")
-        if self._task_keywords and not any(keyword.lower() in content_lower for keyword in self._task_keywords):
+        if self._task_keywords and keyword_coverage_ratio(doc.content, self._task_keywords) == 0.0:
             issues.append("missing task-specific requirements")
         if self._required_sections and not any(
             section.lower() in content_lower for section in self._required_sections
@@ -952,7 +964,7 @@ class SkyPlanEnvironment(Environment):
             )
             keyword_score = keyword_hits / len(documents)
 
-        structure_score = sum("#" in doc.content for doc in documents) / len(documents)
+        structure_score = sum(has_markdown_headers(doc.content) for doc in documents) / len(documents)
         status_score = sum(doc.status != DocumentStatus.REJECTED for doc in documents) / len(documents)
 
         keyword_sets = [self._extract_keywords(doc.content) for doc in documents]
@@ -1042,14 +1054,13 @@ class SkyPlanEnvironment(Environment):
         content_lower = content.lower()
 
         length_score = min(len(content.strip()) / target_length, 1.0)
-        header_score = 1.0 if "#" in content else 0.0
-        paragraph_score = 1.0 if "\n\n" in content else 0.0
-        list_score = 1.0 if any(marker in content for marker in ("- ", "* ", "1. ")) else 0.0
+        header_score = 1.0 if has_markdown_headers(content) else 0.0
+        paragraph_score = 1.0 if count_paragraph_blocks(content) >= 2 else 0.0
+        list_score = 1.0 if has_markdown_lists(content) else 0.0
 
         keyword_score = 1.0
         if self._task_keywords:
-            hits = sum(keyword.lower() in content_lower for keyword in self._task_keywords)
-            keyword_score = min(hits / max(len(self._task_keywords), 1), 1.0)
+            keyword_score = keyword_coverage_ratio(content, self._task_keywords)
 
         doc_hint_bonus = 1.0 if doc_type.lower() in content_lower else 0.0
 

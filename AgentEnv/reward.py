@@ -29,6 +29,12 @@ from typing import Protocol, runtime_checkable
 from openai import OpenAI
 
 try:
+    from .content_utils import (
+        count_paragraph_blocks,
+        has_markdown_headers,
+        has_markdown_lists,
+        keyword_coverage_ratio,
+    )
     from .models import (
         Document,
         DocumentStatus,
@@ -42,6 +48,12 @@ try:
         get_workflow_entry,
     )
 except ImportError:
+    from content_utils import (
+        count_paragraph_blocks,
+        has_markdown_headers,
+        has_markdown_lists,
+        keyword_coverage_ratio,
+    )
     from models import (
         Document,
         DocumentStatus,
@@ -460,7 +472,7 @@ class ContentAnalyzer:
         Returns:
             True if headers present
         """
-        return "##" in content
+        return has_markdown_headers(content)
 
     @staticmethod
     def has_lists(content: str) -> bool:
@@ -472,7 +484,7 @@ class ContentAnalyzer:
         Returns:
             True if lists present
         """
-        return "-" in content or "*" in content
+        return has_markdown_lists(content)
 
     @staticmethod
     def count_paragraphs(content: str) -> int:
@@ -484,7 +496,7 @@ class ContentAnalyzer:
         Returns:
             Number of paragraphs
         """
-        return content.count("\n\n")
+        return count_paragraph_blocks(content)
 
     @staticmethod
     def has_keyword(content: str, keyword: str, case_sensitive: bool = False) -> bool:
@@ -848,8 +860,7 @@ class QualityBonusCalculator(BaseCalculator):
         if not keywords:
             return 1.0
 
-        matches = sum(1 for kw in keywords if kw.lower() in content)
-        return matches / len(keywords)
+        return keyword_coverage_ratio(content, keywords)
 
     def _score_professionalism(self, content: str) -> float:
         """Score professionalism of writing.
