@@ -107,6 +107,49 @@ python3 server/AgentEnv_environment.py
 pytest tests/ -v
 ```
 
+### OpenEnv Commands
+
+#### Usage: openenv [OPTIONS] COMMAND [ARGS]...
+
+OpenEnv - An e2e framework for creating, deploying and using isolated execution environments for agentic RL training
+
+#### Options
+```bash
+# Install completion for the current shell. 
+openenv --install-completion
+
+# Show completion for the current shell, to copy it or customize the installation.
+openenv --show-completion
+
+# Show help message and exit.
+openenv --help
+
+```
+
+#### Commands
+```bash
+# Initialize a new OpenEnv environment
+openenv init
+
+# Build Docker images for OpenEnv environments
+openenv build
+
+# Validate environment structure and deployment readiness
+openenv validate
+
+# Push an OpenEnv environment to Hugging Face Spaces or custom registry
+openenv push
+
+# Serve environments locally (TODO: Phase 4)
+openenv serve
+
+# Fork (duplicate) a Hugging Face Space to your account
+openenv fork
+
+# Manage OpenEnv skills for AI assistants
+openenv skills
+```
+
 ## Hackathon Requirements
 
 ### Mandatory Submission Checklist
