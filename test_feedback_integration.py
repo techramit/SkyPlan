@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from AgentEnv.client import AgentenvEnv
-from AgentEnv.models import Document, Feedback, LastAction, SkyPlanAction
+from AgentEnv.models import ActionType, Document, Feedback, LastAction, SkyPlanAction
 from AgentEnv.reward import RewardCalculator
 from AgentEnv.tasks import TASKS
 
@@ -274,6 +274,27 @@ def test_model_summary_helpers_return_human_readable_strings():
     assert feedback.get_summary().startswith("[Request for Revision] Taylor")
     assert "Expand the requirements section" in feedback.get_summary()
     assert "Success - Research completed" in last_action.get_summary()
+
+
+def test_public_package_exports_resolve_cleanly():
+    """Wildcard-friendly package exports should map to real symbols."""
+
+    package = import_module("AgentEnv")
+    missing = [name for name in package.__all__ if not hasattr(package, name)]
+
+    assert missing == []
+
+
+def test_models_module_exports_and_action_category_helper_are_runtime_safe():
+    """models.__all__ and ActionType helpers should stay valid at runtime."""
+
+    models_module = import_module("AgentEnv.models")
+    missing = [name for name in models_module.__all__ if not hasattr(models_module, name)]
+
+    assert missing == []
+    assert ActionType.get_category("WRITE_PRD") == "PRODUCT"
+    assert ActionType.get_category("SEARCH_MARKET") == "RESEARCH"
+    assert ActionType.get_category("NOT_A_REAL_ACTION") == "UNKNOWN"
 
 
 def test_reward_calculator_clamps_step_reward_but_keeps_raw_total():

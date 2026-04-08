@@ -63,7 +63,6 @@ __all__ = [
     "DocumentStatusConfig",
     "SkyPlanAction",
     "SkyPlanObservation",
-    "RewardConfig",
     "WorkflowConfig",
     "ValidationConfig",
 ]
@@ -779,46 +778,6 @@ class ActionType(str, Enum):
     PRIORITIZE_OBJECTIVES = "PRIORITIZE_OBJECTIVES"
     REQUEST_REVISION = "REQUEST_REVISION"
 
-    # Action to category mapping
-    _ACTION_CATEGORIES: dict[str, str] = {
-        # RESEARCH category
-        SEARCH_MARKET: "RESEARCH",
-        ANALYZE_COMPETITORS: "RESEARCH",
-        VALIDATE_PROBLEM: "RESEARCH",
-        SUMMARIZE_INSIGHTS: "RESEARCH",
-        IDENTIFY_OPPORTUNITIES: "RESEARCH",
-        # PRODUCT category
-        WRITE_PRD: "PRODUCT",
-        DEFINE_FEATURES: "PRODUCT",
-        IDENTIFY_USER_PERSONA: "PRODUCT",
-        PRIORITIZE_FEATURES: "PRODUCT",
-        DEFINE_SUCCESS_METRICS: "PRODUCT",
-        # ARCHITECTURE category
-        DESIGN_ARCHITECTURE: "ARCHITECTURE",
-        SELECT_TECH_STACK: "ARCHITECTURE",
-        DEFINE_APIS: "ARCHITECTURE",
-        DESIGN_DATA_MODEL: "ARCHITECTURE",
-        WRITE_TRD: "ARCHITECTURE",
-        # PLANNING category
-        CREATE_ROADMAP: "PLANNING",
-        BREAK_INTO_TASKS: "PLANNING",
-        PLAN_SPRINTS: "PLANNING",
-        ESTIMATE_TIMELINES: "PLANNING",
-        DEFINE_DEPENDENCIES: "PLANNING",
-        # VALIDATION category
-        REVIEW_DOCUMENTS: "VALIDATION",
-        CHECK_CONSISTENCY: "VALIDATION",
-        VALIDATE_CLAIMS: "VALIDATION",
-        IDENTIFY_RISKS: "VALIDATION",
-        SCORE_PLAN: "VALIDATION",
-        # STRATEGY category
-        SET_DIRECTION: "STRATEGY",
-        REVIEW_PLAN: "STRATEGY",
-        APPROVE_STRATEGY: "STRATEGY",
-        PRIORITIZE_OBJECTIVES: "STRATEGY",
-        REQUEST_REVISION: "STRATEGY",
-    }
-
     @classmethod
     def get_category(cls, action_type: str) -> str:
         """Get the category of an action type.
@@ -829,7 +788,7 @@ class ActionType(str, Enum):
         Returns:
             The category name
         """
-        return cls._ACTION_CATEGORIES.get(action_type, "UNKNOWN")
+        return ACTION_CATEGORIES.get(action_type, "UNKNOWN")
 
     @classmethod
     def get_allowed_actions_for_agent(cls, agent_id: str) -> list[str]:
@@ -893,6 +852,58 @@ class ActionType(str, Enum):
                 ],
             }
             return agent_actions.get(agent_id, [])
+
+
+ACTIONS_BY_CATEGORY: dict[str, list[str]] = {
+    "RESEARCH": [
+        ActionType.SEARCH_MARKET.value,
+        ActionType.ANALYZE_COMPETITORS.value,
+        ActionType.VALIDATE_PROBLEM.value,
+        ActionType.SUMMARIZE_INSIGHTS.value,
+        ActionType.IDENTIFY_OPPORTUNITIES.value,
+    ],
+    "PRODUCT": [
+        ActionType.WRITE_PRD.value,
+        ActionType.DEFINE_FEATURES.value,
+        ActionType.IDENTIFY_USER_PERSONA.value,
+        ActionType.PRIORITIZE_FEATURES.value,
+        ActionType.DEFINE_SUCCESS_METRICS.value,
+    ],
+    "ARCHITECTURE": [
+        ActionType.DESIGN_ARCHITECTURE.value,
+        ActionType.SELECT_TECH_STACK.value,
+        ActionType.DEFINE_APIS.value,
+        ActionType.DESIGN_DATA_MODEL.value,
+        ActionType.WRITE_TRD.value,
+    ],
+    "PLANNING": [
+        ActionType.CREATE_ROADMAP.value,
+        ActionType.BREAK_INTO_TASKS.value,
+        ActionType.PLAN_SPRINTS.value,
+        ActionType.ESTIMATE_TIMELINES.value,
+        ActionType.DEFINE_DEPENDENCIES.value,
+    ],
+    "VALIDATION": [
+        ActionType.REVIEW_DOCUMENTS.value,
+        ActionType.CHECK_CONSISTENCY.value,
+        ActionType.VALIDATE_CLAIMS.value,
+        ActionType.IDENTIFY_RISKS.value,
+        ActionType.SCORE_PLAN.value,
+    ],
+    "STRATEGY": [
+        ActionType.SET_DIRECTION.value,
+        ActionType.REVIEW_PLAN.value,
+        ActionType.APPROVE_STRATEGY.value,
+        ActionType.PRIORITIZE_OBJECTIVES.value,
+        ActionType.REQUEST_REVISION.value,
+    ],
+}
+
+ACTION_CATEGORIES: dict[str, str] = {
+    action_type: category
+    for category, action_types in ACTIONS_BY_CATEGORY.items()
+    for action_type in action_types
+}
 
 
 # ============================================================================
