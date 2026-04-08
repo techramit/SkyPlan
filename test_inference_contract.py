@@ -93,8 +93,8 @@ def test_main_logs_end_after_env_close(monkeypatch):
         events.append("create")
         return FakeEnv()
 
-    async def fake_run_episode(client, env, task_id, task_config):
-        del client, env, task_id, task_config
+    async def fake_run_episode(client, env, task_id, task_config, runtime_config):
+        del client, env, task_id, task_config, runtime_config
         events.append("run")
         return {"success": True, "steps": 1, "rewards": [0.5]}
 
@@ -125,8 +125,8 @@ def test_main_still_logs_end_when_episode_execution_raises(monkeypatch):
         del image_name
         return FakeEnv()
 
-    async def fake_run_episode(client, env, task_id, task_config):
-        del client, env, task_id, task_config
+    async def fake_run_episode(client, env, task_id, task_config, runtime_config):
+        del client, env, task_id, task_config, runtime_config
         raise RuntimeError("episode failed")
 
     monkeypatch.setattr(inference, "load_env_file", lambda path=".env": None)
@@ -209,6 +209,8 @@ def test_run_episode_fails_fast_when_model_request_fails(monkeypatch):
         task_selector="easy_user_authentication",
         temperature=0.0,
         max_tokens=2000,
+        max_action_chars=16000,
+        step_recovery_attempts=1,
     )
     events: list[str] = []
 
@@ -236,6 +238,128 @@ def test_run_episode_fails_fast_when_model_request_fails(monkeypatch):
         )
     )
 
-    assert result == {"success": False, "steps": 1, "rewards": [0.0]}
+    assert result["success"] is False
+    assert result["steps"] == 1
+    assert result["rewards"] == [0.0]
     assert any("[model-error] maya: 401 invalid" in event for event in events)
     assert any("MODEL_REQUEST_FAILED" in event for event in events)
+
+
+def test_sanitize_action_payload_truncates_and_removes_control_characters():
+    """Model output should be normalized before it is sent to the environment server."""
+
+    runtime_config = inference.RuntimeConfig(
+        api_base_url="https://router.huggingface.co/v1",
+        model_name="test-model",
+        api_key="test-token",
+        image_name="skyplan-env",
+        task_selector="easy_user_authentication",
+        temperature=0.0,
+        max_tokens=2000,
+        max_action_chars=24,
+        step_recovery_attempts=1,
+    )
+
+    payload = inference.sanitize_action_payload(
+        {
+            "action_type": "SEARCH_MARKET",
+            "reasoning": "Research\x00the market",
+            "content": "abc\x00def\n" + ("x" * 40),
+        },
+        agent_id="maya",
+        runtime_config=runtime_config,
+    )
+
+    assert payload["action_type"] == "SEARCH_MARKET"
+    assert "\x00" not in payload["reasoning"]
+    assert "\x00" not in payload["content"]
+    assert len(payload["content"]) == 24
+
+
+def test_run_episode_recovers_from_retryable_step_error(monkeypatch):
+    """A transient WebSocket drop should recreate the env and replay prior state once."""
+
+    initial_observation = _make_observation().model_copy(update={"current_agent": "maya"})
+    final_observation = _make_observation().model_copy(
+        update={"current_agent": "elon", "done": True, "step_count": 1}
+    )
+    events: list[str] = []
+
+    class FailingEnv:
+        async def reset(self, **kwargs):
+            del kwargs
+            events.append("reset:first")
+            return SimpleNamespace(observation=initial_observation)
+
+        async def step(self, action):
+            del action
+            events.append("step:first")
+            raise RuntimeError("no close frame received or sent")
+
+        async def close(self):
+            events.append("close:first")
+
+    class RecoveredEnv:
+        async def reset(self, **kwargs):
+            del kwargs
+            events.append("reset:recovered")
+            return SimpleNamespace(observation=initial_observation)
+
+        async def step(self, action):
+            events.append(f"step:recovered:{action.agent_id}:{action.action_type}")
+            return SimpleNamespace(observation=final_observation, reward=0.5, done=True)
+
+        async def close(self):
+            events.append("close:recovered")
+
+    async def fake_from_docker_image(image_name):
+        del image_name
+        return RecoveredEnv()
+
+    runtime_config = inference.RuntimeConfig(
+        api_base_url="https://router.huggingface.co/v1",
+        model_name="test-model",
+        api_key="test-token",
+        image_name="skyplan-env",
+        task_selector="easy_user_authentication",
+        temperature=0.0,
+        max_tokens=2000,
+        max_action_chars=16000,
+        step_recovery_attempts=1,
+    )
+
+    monkeypatch.setattr(
+        inference,
+        "get_model_message",
+        lambda **kwargs: {
+            "action_type": "SEARCH_MARKET",
+            "reasoning": "Research the authentication market carefully.",
+            "content": "# Research\n\n## Findings\n- MFA is expected",
+        },
+    )
+    monkeypatch.setattr(inference, "get_all_agent_ids", lambda: ["maya"])
+    monkeypatch.setattr(
+        inference.AgentenvEnv,
+        "from_docker_image",
+        staticmethod(fake_from_docker_image),
+    )
+    monkeypatch.setattr(inference, "log_error", lambda message: events.append(f"error:{message}"))
+    monkeypatch.setattr(inference, "log_step", lambda **kwargs: events.append(f"log:{kwargs['action']}"))
+
+    result = asyncio.run(
+        inference.run_episode(
+            client=object(),
+            env=FailingEnv(),
+            task_id="easy_user_authentication",
+            task_config=inference.TASKS["easy_user_authentication"],
+            runtime_config=runtime_config,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["steps"] == 1
+    assert result["rewards"] == [0.5]
+    assert any("step-recover" in event for event in events)
+    assert "close:first" in events
+    assert "reset:recovered" in events
+    assert any("step:recovered:maya:SEARCH_MARKET" == event for event in events)

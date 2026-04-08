@@ -36,6 +36,8 @@ class RuntimeConfig:
     task_selector: str
     temperature: float
     max_tokens: int
+    max_action_chars: int
+    step_recovery_attempts: int
 
 
 class ModelRequestError(RuntimeError):
@@ -128,6 +130,8 @@ def get_runtime_config(task_override: str | None = None) -> RuntimeConfig:
         task_selector=(task_override or os.getenv("SKYPLAN_TASK", "all")).strip(),
         temperature=float(os.getenv("SKYPLAN_TEMPERATURE", "0.0")),
         max_tokens=int(os.getenv("SKYPLAN_MAX_TOKENS", "2000")),
+        max_action_chars=int(os.getenv("SKYPLAN_MAX_ACTION_CHARS", "16000")),
+        step_recovery_attempts=int(os.getenv("SKYPLAN_STEP_RECOVERY_ATTEMPTS", "1")),
     )
 
 
@@ -285,6 +289,116 @@ def parse_agent_response(response: str, agent_id: str) -> dict[str, str]:
         }
 
 
+def _sanitize_text(value: str, *, max_chars: int) -> str:
+    """Normalize model text before sending it over the WebSocket."""
+
+    cleaned = "".join(
+        character
+        for character in value
+        if character in {"\n", "\r", "\t"} or ord(character) >= 32
+    )
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars].rstrip()
+    return cleaned
+
+
+def sanitize_action_payload(
+    action_data: dict[str, str],
+    agent_id: str,
+    runtime_config: RuntimeConfig,
+) -> dict[str, str]:
+    """Clamp and normalize model output into a transport-safe action payload."""
+
+    allowed_actions = get_allowed_actions(agent_id)
+    default_action = allowed_actions[0] if allowed_actions else "UNKNOWN"
+    action_type = action_data.get("action_type", default_action)
+    if action_type not in allowed_actions:
+        action_type = default_action
+
+    reasoning = _sanitize_text(
+        action_data.get("reasoning", "") or "Providing the next workflow deliverable.",
+        max_chars=2000,
+    )
+    content = _sanitize_text(
+        action_data.get("content", ""),
+        max_chars=max(runtime_config.max_action_chars, 1),
+    )
+
+    return {
+        "action_type": action_type,
+        "reasoning": reasoning or "Providing the next workflow deliverable.",
+        "content": content,
+    }
+
+
+def _is_retryable_step_error(exc: Exception) -> bool:
+    """Identify transient transport failures that are worth replaying once."""
+
+    message = str(exc).lower()
+    retryable_markers = (
+        "no close frame received or sent",
+        "connection closed",
+        "connection reset",
+        "broken pipe",
+        "websocket",
+        "keepalive ping timeout",
+    )
+    return any(marker in message for marker in retryable_markers)
+
+
+def _task_reset_kwargs(task_id: str, task_config: Any) -> dict[str, Any]:
+    """Build reset kwargs from the task configuration."""
+
+    return {
+        "task_description": task_config.description,
+        "task_keywords": task_config.required_keywords,
+        "task_difficulty": task_config.difficulty,
+        "required_sections": task_config.required_sections,
+        "task_id": task_id,
+    }
+
+
+async def _reset_task_environment(
+    env: AgentenvEnv,
+    task_id: str,
+    task_config: Any,
+) -> SkyPlanObservation:
+    """Reset an environment instance for a specific task."""
+
+    reset_result = await env.reset(**_task_reset_kwargs(task_id, task_config))
+    return reset_result.observation
+
+
+async def _recover_episode_environment(
+    current_env: AgentenvEnv,
+    runtime_config: RuntimeConfig,
+    task_id: str,
+    task_config: Any,
+    completed_actions: list[SkyPlanAction],
+) -> tuple[AgentenvEnv, SkyPlanObservation]:
+    """Recreate the environment and replay successful actions after a transport failure."""
+
+    try:
+        await current_env.close()
+    except Exception as exc:
+        log_error(f"[step-recover] close error before reconnect for task {task_id}: {exc}")
+
+    recovered_env = await AgentenvEnv.from_docker_image(runtime_config.image_name)
+    observation = await _reset_task_environment(recovered_env, task_id, task_config)
+
+    for replay_action in completed_actions:
+        replay_result = await recovered_env.step(replay_action)
+        observation = replay_result.observation
+        if observation.errors:
+            raise RuntimeError(
+                f"Replay failed after {replay_action.agent_id}:{replay_action.action_type}: "
+                f"{observation.errors[-1]}"
+            )
+
+    return recovered_env, observation
+
+
 def get_model_message(
     client: OpenAI,
     step: int,
@@ -334,19 +448,13 @@ async def run_episode(
     steps_taken = 0
     observation: SkyPlanObservation | None = None
     encountered_error = False
+    completed_actions: list[SkyPlanAction] = []
 
     try:
-        reset_result = await env.reset(
-            task_description=task_config.description,
-            task_keywords=task_config.required_keywords,
-            task_difficulty=task_config.difficulty,
-            required_sections=task_config.required_sections,
-            task_id=task_id,
-        )
-        observation = reset_result.observation
+        observation = await _reset_task_environment(env, task_id, task_config)
     except Exception as exc:
         log_error(f"[reset-error] task={task_id}: {exc}")
-        return {"success": False, "steps": 0, "rewards": rewards}
+        return {"success": False, "steps": 0, "rewards": rewards, "env": env}
 
     for step_number, agent_id in enumerate(get_all_agent_ids(), start=1):
         if observation.done:
@@ -375,6 +483,7 @@ async def run_episode(
             )
             break
 
+        action_data = sanitize_action_payload(action_data, agent_id, runtime_config)
         action_data["agent_id"] = agent_id
 
         try:
@@ -401,17 +510,45 @@ async def run_episode(
         done = False
         reward = 0.0
 
-        try:
-            result = await env.step(action)
-            observation = result.observation
-            reward = float(result.reward or 0.0)
-            done = bool(result.done)
-            if observation.errors:
-                step_error = observation.errors[-1]
-        except Exception as exc:
-            step_error = str(exc)
-            encountered_error = True
-            log_error(f"[step-error] task={task_id} step={step_number}: {exc}")
+        attempts_remaining = runtime_config.step_recovery_attempts
+        while True:
+            try:
+                result = await env.step(action)
+                observation = result.observation
+                reward = float(result.reward or 0.0)
+                done = bool(result.done)
+                if observation.errors:
+                    step_error = observation.errors[-1]
+                break
+            except Exception as exc:
+                if attempts_remaining > 0 and _is_retryable_step_error(exc):
+                    attempts_remaining -= 1
+                    log_error(
+                        f"[step-recover] task={task_id} step={step_number}: "
+                        f"restarting env after transport error: {exc}"
+                    )
+                    try:
+                        env, observation = await _recover_episode_environment(
+                            current_env=env,
+                            runtime_config=runtime_config,
+                            task_id=task_id,
+                            task_config=task_config,
+                            completed_actions=completed_actions,
+                        )
+                    except Exception as recovery_exc:
+                        step_error = str(recovery_exc)
+                        encountered_error = True
+                        log_error(
+                            f"[step-error] task={task_id} step={step_number}: "
+                            f"recovery failed: {recovery_exc}"
+                        )
+                        break
+                    continue
+
+                step_error = str(exc)
+                encountered_error = True
+                log_error(f"[step-error] task={task_id} step={step_number}: {exc}")
+                break
 
         rewards.append(reward)
         steps_taken = step_number
@@ -426,11 +563,12 @@ async def run_episode(
         if step_error:
             encountered_error = True
             break
+        completed_actions.append(action)
         if done:
             break
 
     success = bool(observation and observation.done) and not encountered_error
-    return {"success": success, "steps": steps_taken, "rewards": rewards}
+    return {"success": success, "steps": steps_taken, "rewards": rewards, "env": env}
 
 
 def resolve_task_ids(task_selector: str) -> list[str]:
@@ -463,7 +601,7 @@ async def main(argv: list[str] | None = None) -> None:
     for task_id in task_ids:
         task_config = TASKS[task_id]
         env: AgentenvEnv | None = None
-        result: dict[str, Any] = {"success": False, "steps": 0, "rewards": []}
+        result: dict[str, Any] = {"success": False, "steps": 0, "rewards": [], "env": None}
 
         log_start(task=task_id, env=BENCHMARK, model=runtime_config.model_name)
         try:
@@ -472,9 +610,10 @@ async def main(argv: list[str] | None = None) -> None:
         except Exception as exc:
             log_error(f"Failed to execute task {task_id}: {exc}")
         finally:
-            if env is not None:
+            env_to_close = result.get("env") or env
+            if env_to_close is not None:
                 try:
-                    await env.close()
+                    await env_to_close.close()
                 except Exception as exc:
                     log_error(f"env.close() error for task {task_id}: {exc}")
             log_end(
