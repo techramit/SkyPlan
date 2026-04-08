@@ -7,6 +7,7 @@ import pytest
 
 from AgentEnv.client import AgentenvEnv
 from AgentEnv.models import Document, Feedback, LastAction, SkyPlanAction
+from AgentEnv.reward import RewardCalculator
 from AgentEnv.tasks import TASKS
 
 
@@ -251,6 +252,53 @@ def test_client_parses_feedback_and_status_fields_into_typed_models():
     assert isinstance(result.observation.last_action_result, LastAction)
     assert result.observation.document_status_summary["draft"] == 1
     assert result.observation.documents_awaiting_review == ["PRD (needs review)"]
+
+
+def test_model_summary_helpers_return_human_readable_strings():
+    """Enum-backed summary helpers should remain safe at runtime."""
+
+    feedback = Feedback.create(
+        from_agent="taylor",
+        to_agent="elon",
+        document_type="PRD",
+        feedback_type="request_revision",
+        comment="Expand the requirements section",
+    )
+    last_action = LastAction.create(
+        agent_id="maya",
+        action_type="SEARCH_MARKET",
+        result="success",
+        message="Research completed",
+    )
+
+    assert feedback.get_summary().startswith("[Request for Revision] Taylor")
+    assert "Expand the requirements section" in feedback.get_summary()
+    assert "Success - Research completed" in last_action.get_summary()
+
+
+def test_reward_calculator_clamps_step_reward_but_keeps_raw_total():
+    """Per-step rewards should stay judge-safe without losing raw reward math."""
+
+    calculator = RewardCalculator(use_llm=False)
+    action = SkyPlanAction(
+        agent_id="maya",
+        action_type="SEARCH_MARKET",
+        reasoning="Providing a very small output that should trigger penalties.",
+        content="# Research\nshort",
+    )
+    documents = {
+        "RESEARCH": Document.create(
+            doc_type="RESEARCH",
+            content=action.content,
+            author="maya",
+        )
+    }
+
+    step_reward = calculator.calculate_step_reward(action=action, documents=documents)
+
+    assert 0.0 <= step_reward.total <= 1.0
+    assert step_reward.raw_total <= step_reward.total
+    assert step_reward.raw_total < 0.0
 
 
 @pytest.mark.parametrize("task_id", sorted(TASKS))
