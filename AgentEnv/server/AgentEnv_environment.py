@@ -29,6 +29,7 @@ try:
         SkyPlanObservation,
         ValidationConfig,
         WorkflowConfig,
+    DocumentStatusConfig,
     )
     from ..reward import RewardCalculator, StepReward
     from ..workflow import (
