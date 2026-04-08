@@ -181,30 +181,6 @@ class DocumentType(str, Enum):
     VALIDATION = "VALIDATION"
     STRATEGY = "STRATEGY"
 
-    # Display names mapping
-    _DISPLAY_NAMES: dict[str, str] = {
-        RESEARCH: "Research Summary",
-        PRD: "Product Requirements Document",
-        TRD: "Technical Requirements Document",
-        ARCHITECTURE: "System Architecture",
-        ROADMAP: "Product Roadmap",
-        TASKS: "Task Breakdown",
-        VALIDATION: "Validation Report",
-        STRATEGY: "Strategic Direction",
-    }
-
-    # Filename mapping
-    _FILENAMES: dict[str, str] = {
-        RESEARCH: "RESEARCH.md",
-        PRD: "PRD.md",
-        TRD: "TRD.md",
-        ARCHITECTURE: "ARCHITECTURE.md",
-        ROADMAP: "ROADMAP.md",
-        TASKS: "TASKS.md",
-        VALIDATION: "VALIDATION.md",
-        STRATEGY: "STRATEGY.md",
-    }
-
     @classmethod
     def get_display_name(cls, doc_type: str) -> str:
         """Get human-readable display name for a document type.
@@ -215,7 +191,17 @@ class DocumentType(str, Enum):
         Returns:
             Human-readable display name
         """
-        return cls._DISPLAY_NAMES.get(doc_type, doc_type)
+        display_names = {
+            cls.RESEARCH.value: "Research Summary",
+            cls.PRD.value: "Product Requirements Document",
+            cls.TRD.value: "Technical Requirements Document",
+            cls.ARCHITECTURE.value: "System Architecture",
+            cls.ROADMAP.value: "Product Roadmap",
+            cls.TASKS.value: "Task Breakdown",
+            cls.VALIDATION.value: "Validation Report",
+            cls.STRATEGY.value: "Strategic Direction",
+        }
+        return display_names.get(doc_type, doc_type)
 
     @classmethod
     def get_filename(cls, doc_type: str) -> str:
@@ -227,7 +213,17 @@ class DocumentType(str, Enum):
         Returns:
             Filename for the document
         """
-        return cls._FILENAMES.get(doc_type, f"{doc_type}.md")
+        filenames = {
+            cls.RESEARCH.value: "RESEARCH.md",
+            cls.PRD.value: "PRD.md",
+            cls.TRD.value: "TRD.md",
+            cls.ARCHITECTURE.value: "ARCHITECTURE.md",
+            cls.ROADMAP.value: "ROADMAP.md",
+            cls.TASKS.value: "TASKS.md",
+            cls.VALIDATION.value: "VALIDATION.md",
+            cls.STRATEGY.value: "STRATEGY.md",
+        }
+        return filenames.get(doc_type, f"{doc_type}.md")
 
 
 # ============================================================================
@@ -268,16 +264,6 @@ class FeedbackType(str, Enum):
     CONCERN = "concern"
     REQUEST_REVISION = "request_revision"
 
-    # Display names mapping
-    _DISPLAY_NAMES: dict[str, str] = {
-        SUGGESTION: "Suggestion",
-        CRITIQUE: "Critique",
-        QUESTION: "Question",
-        APPROVAL: "Approval",
-        CONCERN: "Concern",
-        REQUEST_REVISION: "Request for Revision",
-    }
-
     @classmethod
     def get_display_name(cls, feedback_type: str) -> str:
         """Get human-readable display name for a feedback type.
@@ -288,7 +274,15 @@ class FeedbackType(str, Enum):
         Returns:
             Human-readable display name
         """
-        return cls._DISPLAY_NAMES.get(feedback_type, feedback_type)
+        display_names = {
+            cls.SUGGESTION.value: "Suggestion",
+            cls.CRITIQUE.value: "Critique",
+            cls.QUESTION.value: "Question",
+            cls.APPROVAL.value: "Approval",
+            cls.CONCERN.value: "Concern",
+            cls.REQUEST_REVISION.value: "Request for Revision",
+        }
+        return display_names.get(feedback_type, feedback_type)
 
 
 # ============================================================================
@@ -313,21 +307,6 @@ class ActionResult(str, Enum):
     REJECTED = "rejected"
     PENDING = "pending"
 
-    # Display names mapping
-    _DISPLAY_NAMES: dict[str, str] = {
-        SUCCESS: "Success",
-        FAILURE: "Failure",
-        PARTIAL: "Partial",
-        REJECTED: "Rejected",
-        PENDING: "Pending",
-    }
-
-    # Successful outcomes
-    _SUCCESSFUL_OUTCOMES: set[str] = {SUCCESS, PARTIAL}
-
-    # Failure outcomes
-    _FAILURE_OUTCOMES: set[str] = {FAILURE, REJECTED}
-
     @classmethod
     def get_display_name(cls, result: str) -> str:
         """Get human-readable display name for an action result.
@@ -338,7 +317,14 @@ class ActionResult(str, Enum):
         Returns:
             Human-readable display name
         """
-        return cls._DISPLAY_NAMES.get(result, result)
+        display_names = {
+            cls.SUCCESS.value: "Success",
+            cls.FAILURE.value: "Failure",
+            cls.PARTIAL.value: "Partial",
+            cls.REJECTED.value: "Rejected",
+            cls.PENDING.value: "Pending",
+        }
+        return display_names.get(result, result)
 
     @classmethod
     def is_successful(cls, result: str) -> bool:
@@ -350,7 +336,7 @@ class ActionResult(str, Enum):
         Returns:
             True if successful
         """
-        return result in cls._SUCCESSFUL_OUTCOMES
+        return result in {cls.SUCCESS.value, cls.PARTIAL.value}
 
     @classmethod
     def is_failure(cls, result: str) -> bool:
@@ -362,7 +348,7 @@ class ActionResult(str, Enum):
         Returns:
             True if failed
         """
-        return result in cls._FAILURE_OUTCOMES
+        return result in {cls.FAILURE.value, cls.REJECTED.value}
 
 
 # ============================================================================

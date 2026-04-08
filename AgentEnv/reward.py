@@ -379,6 +379,7 @@ class StepReward:
     teamwork_bonus: float
     penalty: float
     total: float
+    raw_total: float = 0.0
     feedback_generation_reward: float = 0.0
     feedback_resolution_reward: float = 0.0
     document_approval_reward: float = 0.0
@@ -1648,7 +1649,7 @@ class RewardCalculator:
         document_approval_reward = self.calculate_document_approval_reward(
             new_approvals or []
         )
-        total = (
+        raw_total = (
             quality_bonus
             + teamwork_bonus
             + penalty
@@ -1657,6 +1658,7 @@ class RewardCalculator:
             + feedback_resolution_reward
             + document_approval_reward
         )
+        total = self._clamp_step_reward(raw_total)
 
         # Create step reward
         step_reward = StepReward(
@@ -1664,6 +1666,7 @@ class RewardCalculator:
             teamwork_bonus=teamwork_bonus,
             penalty=penalty,
             total=total,
+            raw_total=raw_total,
             feedback_generation_reward=feedback_generation_reward,
             feedback_resolution_reward=feedback_resolution_reward,
             document_approval_reward=document_approval_reward,
@@ -1677,6 +1680,12 @@ class RewardCalculator:
         self._previous_agent_id = action.agent_id
 
         return step_reward
+
+    @staticmethod
+    def _clamp_step_reward(raw_total: float) -> float:
+        """Clamp externally visible per-step rewards to the OpenEnv 0-1 range."""
+
+        return max(0.0, min(1.0, raw_total))
 
     def calculate_feedback_generation_reward(self, feedback_list: list) -> float:
         """Calculate reward for feedback generation.
@@ -1764,7 +1773,7 @@ class RewardCalculator:
         )
 
         # Sum step rewards
-        step_total = sum(step.total for step in self._step_rewards)
+        step_total = sum(step.raw_total for step in self._step_rewards)
 
         # Calculate raw total
         raw_total = step_total + completion_bonus
@@ -1819,7 +1828,7 @@ class RewardCalculator:
         Returns:
             Current total reward
         """
-        return sum(step.total for step in self._step_rewards)
+        return sum(step.raw_total for step in self._step_rewards)
 
 
 # ============================================================================

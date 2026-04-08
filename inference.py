@@ -30,7 +30,6 @@ IMAGE_NAME = os.getenv("IMAGE_NAME", "AgentEnv-env:latest")
 TASK_SELECTOR = os.getenv("SKYPLAN_TASK", "all").strip()
 TEMPERATURE = float(os.getenv("SKYPLAN_TEMPERATURE", "0.0"))
 MAX_TOKENS = int(os.getenv("SKYPLAN_MAX_TOKENS", "2000"))
-SUCCESS_SCORE_THRESHOLD = 0.5
 BENCHMARK = "skyplan"
 
 
@@ -206,6 +205,7 @@ async def run_episode(
     rewards: list[float] = []
     steps_taken = 0
     observation: SkyPlanObservation | None = None
+    encountered_error = False
 
     try:
         reset_result = await env.reset(
@@ -266,6 +266,7 @@ async def run_episode(
                 step_error = observation.errors[-1]
         except Exception as exc:
             step_error = str(exc)
+            encountered_error = True
             log_error(f"[step-error] task={task_id} step={step_number}: {exc}")
 
         rewards.append(reward)
@@ -279,12 +280,12 @@ async def run_episode(
         )
 
         if step_error:
+            encountered_error = True
             break
         if done:
             break
 
-    average_reward = sum(rewards) / len(rewards) if rewards else 0.0
-    success = average_reward >= SUCCESS_SCORE_THRESHOLD
+    success = bool(observation and observation.done) and not encountered_error
     return {"success": success, "steps": steps_taken, "rewards": rewards}
 
 
