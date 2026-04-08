@@ -1,7 +1,10 @@
 spec_version: 1
 name: AgentEnv
+description: Multi-agent SkyPlan environment for autonomous product planning, validation, and strategic approval workflows.
 type: space
 runtime: fastapi
 app: server.app:app
+action: SkyPlanAction
+observation: SkyPlanObservation
 port: 8000
 
