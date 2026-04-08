@@ -29,6 +29,8 @@ from openai import OpenAI
 
 from .models import (
     Document,
+    DocumentStatus,
+    DocumentStatusConfig,
     SkyPlanAction,
 )
 from .workflow import (
@@ -192,6 +194,14 @@ class RewardConfig:
     PENALTY_WRONG_ROLE: float = -0.15
     PENALTY_IGNORE_ROLE: float = -0.1
     PENALTY_MAX_PER_STEP: float = -0.3
+
+    # Approval rewards for status transition actions
+    APPROVAL_BONUS_MAX: float = 0.2  # Maximum bonus per approval action
+    APPROVAL_MARK_REVIEW_BONUS: float = 0.05  # Bonus for marking documents for review
+    APPROVAL_APPROVE_BONUS: float = 0.15  # Bonus for approving documents
+    APPROVAL_REJECT_BONUS: float = 0.02  # Small bonus for rejecting (providing feedback)
+    APPROVAL_ALL_BONUS: float = 0.2  # Bonus for Sam approving all documents
+    APPROVAL_FINAL_BONUS: float = 0.2  # Bonus for final CEO approval
 
     # Contradiction Patterns
     CONTRADICTION_PHRASES: list[str] = field(
@@ -1432,6 +1442,32 @@ class PenaltyCalculator(BaseCalculator):
 # ============================================================================
 
 
+    def _calculate_approval_bonus(self, action: SkyPlanAction, documents: dict[str, Document]) -> float:
+        """Calculate approval bonus for status-changing actions.
+
+        Args:
+            action: The action taken
+            documents: All documents with current status
+
+        Returns:
+            Approval bonus value (0.0 to APPROVAL_FINAL_BONUS)
+        """
+        # Check if action changes document status
+        status_change = DocumentStatusConfig.STATUS_TRANSITIONS.get(action.action_type)
+        if not status_change:
+            return 0.0
+
+        # Determine bonus based on action type
+        bonus_map = {
+            "MARK_DOCUMENT_REVIEW": self.config.APPROVAL_MARK_REVIEW_BONUS,
+            "APPROVE_DOCUMENT": self.config.APPROVAL_APPROVE_BONUS,
+            "REJECT_DOCUMENT": self.config.APPROVAL_REJECT_BONUS,
+            "APPROVE_ALL_DOCUMENTS": self.config.APPROVAL_ALL_BONUS,
+            "FINAL_APPROVAL": self.config.APPROVAL_FINAL_BONUS,
+        }
+
+        return bonus_map.get(action.action_type, 0.0)
+
 class ScoreNormalizer:
     """Normalizes raw reward scores to [0.0, 1.0] range."""
 
@@ -1506,6 +1542,8 @@ class RewardCalculator:
         self.completion_calculator = CompletionBonusCalculator(config=self.config)
         self.penalty_calculator = PenaltyCalculator(config=self.config)
         self.normalizer = ScoreNormalizer(config=self.config)
+        self.approval_calculator = ApprovalBonusCalculator(config=self.config)
+        self._approved_documents = set()
 
         # Episode tracking
         self._step_rewards: list[StepReward] = []
@@ -1558,7 +1596,11 @@ class RewardCalculator:
         penalty = penalty_score.total
 
         # Calculate total step reward
-        total = quality_bonus + teamwork_bonus + penalty
+        # Calculate approval bonus for status-changing actions
+        approval_bonus = self._calculate_approval_bonus(action, documents)
+        
+        # Sum all reward components
+        total = quality_bonus + teamwork_bonus + penalty + approval_bonus
 
         # Create step reward
         step_reward = StepReward(
