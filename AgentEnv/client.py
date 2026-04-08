@@ -12,7 +12,7 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import SkyPlanAction, SkyPlanObservation
+from .models import Document, Feedback, LastAction, SkyPlanAction, SkyPlanObservation
 from .workflow import get_first_agent
 
 
@@ -79,6 +79,10 @@ class AgentenvEnv(
             StepResult with SkyPlanObservation
         """
         obs_data = payload.get("observation", {})
+        documents = self._parse_documents(obs_data.get("documents", {}))
+        feedback = self._parse_feedback(obs_data.get("feedback", []))
+        last_action = self._parse_last_action(obs_data.get("last_action_result"))
+
         observation = SkyPlanObservation(
             task_description=obs_data.get("task_description", ""),
             result=obs_data.get("result", ""),
@@ -86,9 +90,9 @@ class AgentenvEnv(
             current_agent=obs_data.get("current_agent", get_first_agent()),
             step_number=obs_data.get("step_number", 1),
             total_steps=obs_data.get("total_steps", 10),
-            documents=obs_data.get("documents", {}),
-            feedback=obs_data.get("feedback", []),
-            last_action_result=obs_data.get("last_action_result"),
+            documents=documents,
+            feedback=feedback,
+            last_action_result=last_action,
             current_state=obs_data.get("current_state", {}),
             document_status_summary=obs_data.get("document_status_summary", {}),
             documents_awaiting_review=obs_data.get("documents_awaiting_review", []),
@@ -118,3 +122,37 @@ class AgentenvEnv(
             episode_id=payload.get("episode_id"),
             step_count=payload.get("step_count", 0),
         )
+
+    @staticmethod
+    def _parse_documents(documents: Dict) -> dict[str, Document]:
+        """Normalize document payloads into typed Document models."""
+
+        parsed_documents: dict[str, Document] = {}
+        for doc_type, document in documents.items():
+            if isinstance(document, Document):
+                parsed_documents[doc_type] = document
+            else:
+                parsed_documents[doc_type] = Document.model_validate(document)
+        return parsed_documents
+
+    @staticmethod
+    def _parse_feedback(feedback_items: list) -> list[Feedback]:
+        """Normalize feedback payloads into typed Feedback models."""
+
+        parsed_feedback: list[Feedback] = []
+        for item in feedback_items:
+            if isinstance(item, Feedback):
+                parsed_feedback.append(item)
+            else:
+                parsed_feedback.append(Feedback.model_validate(item))
+        return parsed_feedback
+
+    @staticmethod
+    def _parse_last_action(last_action: Dict | None) -> LastAction | None:
+        """Normalize the last action payload into a typed model."""
+
+        if not last_action:
+            return None
+        if isinstance(last_action, LastAction):
+            return last_action
+        return LastAction.model_validate(last_action)
