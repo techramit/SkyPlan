@@ -34,9 +34,10 @@ try:
     )
     from ..reward import RewardCalculator
     from ..workflow import (
+        get_all_agent_ids,
         get_first_agent,
         get_handoff_message,
-        get_next_agent,
+        get_produced_documents,
         get_required_documents,
     )
 except ImportError:
@@ -56,9 +57,10 @@ except ImportError:
     )
     from reward import RewardCalculator
     from workflow import (
+        get_all_agent_ids,
         get_first_agent,
         get_handoff_message,
-        get_next_agent,
+        get_produced_documents,
         get_required_documents,
     )
 
@@ -102,6 +104,7 @@ TOKEN_STOPWORDS = {
     "team",
 }
 ROLE_AUTHORING_AGENTS = {"maya", "elon", "jordan", "robert"}
+VALID_AGENT_IDS = ROLE_AUTHORING_AGENTS | {"taylor", "sam"}
 BLOCKING_FEEDBACK_TYPES = {"concern", "request_revision"}
 COMPANION_DOCUMENTS = {
     "jordan": ("TRD", "ARCHITECTURE"),
@@ -128,16 +131,19 @@ class SkyPlanEnvironment(Environment):
 
     def __init__(
         self,
-        total_steps: int = WorkflowConfig.DEFAULT_TOTAL_STEPS,
+        total_steps: int = WorkflowConfig.MAX_TOTAL_STEPS,
         use_llm_reward: bool = True,
         llm_api_key: str | None = None,
     ):
         """Initialize the SkyPlan environment with isolated state."""
 
+        self._workflow_order = get_all_agent_ids()
+        self._pending_agents = self._workflow_order.copy()
+        self._max_total_steps = max(total_steps, WorkflowConfig.DEFAULT_TOTAL_STEPS)
+        self._revision_cycles_used = 0
         self._state = State(episode_id=str(uuid4()), step_count=0)
-        self._current_agent = get_first_agent()
+        self._current_agent = self._pending_agents[0] if self._pending_agents else get_first_agent()
         self._step_number = 1
-        self._total_steps = total_steps
         self._documents: dict[str, Document] = {}
         self._feedback: list[Feedback] = []
         self._last_action_result: LastAction | None = None
@@ -170,7 +176,9 @@ class SkyPlanEnvironment(Environment):
         """Reset the environment for a new episode."""
 
         self._state = State(episode_id=str(uuid4()), step_count=0)
-        self._current_agent = get_first_agent()
+        self._pending_agents = self._workflow_order.copy()
+        self._revision_cycles_used = 0
+        self._current_agent = self._pending_agents[0] if self._pending_agents else get_first_agent()
         self._step_number = 1
         self._documents = {}
         self._feedback = []
@@ -234,15 +242,7 @@ class SkyPlanEnvironment(Environment):
             new_approvals=self._new_approvals_this_step,
         ).total
 
-        next_agent = get_next_agent(self._current_agent)
-        if next_agent:
-            self._current_agent = next_agent
-            self._step_number += 1
-        else:
-            self._done = True
-
-        if self._step_number > self._total_steps:
-            self._done = True
+        workflow_status, workflow_note = self._advance_workflow(action.agent_id)
 
         message = f"{action.action_type} completed successfully"
         if self._feedback_generated_this_step or self._feedback_resolved_this_step:
@@ -250,6 +250,8 @@ class SkyPlanEnvironment(Environment):
                 f" ({len(self._feedback_generated_this_step)} feedback generated, "
                 f"{len(self._feedback_resolved_this_step)} resolved)"
             )
+        if workflow_status == "revision_requested":
+            message += " Revision loop scheduled."
 
         self._last_action_result = LastAction.create(
             agent_id=action.agent_id,
@@ -263,13 +265,12 @@ class SkyPlanEnvironment(Environment):
             self._primary_feedback_addressed_this_step
         )
 
-        handoff_msg = get_handoff_message(action.agent_id)
-        reasoning_msg = f"Action processed by {action.agent_id}. {handoff_msg}"
+        reasoning_msg = f"Action processed by {action.agent_id}. {workflow_note}"
 
         return self._build_observation(
             result=f"{action.action_type} completed successfully",
             reasoning=reasoning_msg,
-            status="completed" if self._done else "in_progress",
+            status=workflow_status,
             reward=reward,
         )
 
@@ -293,6 +294,153 @@ class SkyPlanEnvironment(Environment):
             "breakdown": episode_reward.breakdown,
             "step_count": len(episode_reward.step_rewards),
         }
+
+    def _advance_workflow(self, completed_agent: str) -> tuple[str, str]:
+        """Advance the dynamic workflow queue and schedule revision loops when needed."""
+
+        if self._pending_agents and self._pending_agents[0] == completed_agent:
+            self._pending_agents.pop(0)
+
+        revision_queue = self._build_revision_queue(completed_agent)
+        if revision_queue:
+            if self._revision_cycles_used >= WorkflowConfig.MAX_REVISION_CYCLES:
+                self._pending_agents = []
+                self._done = True
+                self._step_number = self._state.step_count
+                return (
+                    "blocked",
+                    "Revision loop requested, but the configured revision budget is exhausted.",
+                )
+
+            self._revision_cycles_used += 1
+            self._pending_agents = revision_queue
+
+        projected_total_steps = self._state.step_count + len(self._pending_agents)
+        if projected_total_steps > self._max_total_steps:
+            self._pending_agents = []
+            self._done = True
+            self._step_number = self._state.step_count
+            return (
+                "blocked",
+                "Workflow terminated because the episode exceeded the configured step budget.",
+            )
+
+        if self._pending_agents:
+            self._done = False
+            self._current_agent = self._pending_agents[0]
+            self._step_number = self._state.step_count + 1
+            if revision_queue:
+                queue_label = " -> ".join(revision_queue)
+                return (
+                    "revision_requested",
+                    f"Revision loop scheduled through {queue_label}.",
+                )
+            return (
+                "in_progress",
+                get_handoff_message(completed_agent),
+            )
+
+        self._done = True
+        self._step_number = self._state.step_count
+        return (
+            "completed",
+            "Workflow complete. All required planning steps have finished.",
+        )
+
+    def _build_revision_queue(self, completed_agent: str) -> list[str]:
+        """Build the next workflow slice when review or strategy requires revision."""
+
+        if completed_agent not in {"taylor", "sam"}:
+            return []
+
+        target_agents = self._get_nonapproved_agent_targets(completed_agent)
+        target_agents.update(self._get_revision_targets_from_feedback(self._feedback_generated_this_step))
+
+        if completed_agent == "sam":
+            target_agents.discard("sam")
+            if not target_agents:
+                strategy_doc = self._documents.get(DocumentType.STRATEGY)
+                if strategy_doc and strategy_doc.status == DocumentStatus.REJECTED:
+                    target_agents.add("taylor")
+
+        return self._workflow_slice_from(target_agents)
+
+    def _get_nonapproved_agent_targets(self, completed_agent: str) -> set[str]:
+        """Identify agent owners for documents that still need revision or approval."""
+
+        if completed_agent == "taylor":
+            relevant_docs = get_required_documents("taylor")
+        else:
+            relevant_docs = (
+                DocumentStatusConfig.get_required_approvals(self._task_id)
+                or get_required_documents("sam")
+            )
+            relevant_docs = list(relevant_docs) + [DocumentType.VALIDATION]
+
+        targets: set[str] = set()
+        for doc_type in relevant_docs:
+            document = self._documents.get(doc_type)
+            if document is None:
+                owner = self._get_document_owner(doc_type)
+                if owner:
+                    targets.add(owner)
+                continue
+
+            if document.status != DocumentStatus.APPROVED:
+                owner = document.author or self._get_document_owner(doc_type)
+                if owner in VALID_AGENT_IDS:
+                    targets.add(owner)
+
+        return targets
+
+    def _get_revision_targets_from_feedback(self, feedback_items: list[Feedback]) -> set[str]:
+        """Derive workflow targets from actionable feedback generated in the current step."""
+
+        targets: set[str] = set()
+        for feedback in feedback_items:
+            if feedback.feedback_type == "approval":
+                continue
+
+            if feedback.to_agent in VALID_AGENT_IDS:
+                targets.add(feedback.to_agent)
+                continue
+
+            if feedback.document_type:
+                owner = self._get_document_owner(feedback.document_type)
+                if owner in VALID_AGENT_IDS:
+                    targets.add(owner)
+
+        return targets
+
+    def _get_document_owner(self, doc_type: str) -> str:
+        """Return the workflow agent responsible for authoring a document type."""
+
+        for agent_id in self._workflow_order:
+            if doc_type in get_produced_documents(agent_id):
+                return agent_id
+        return ""
+
+    def _workflow_slice_from(self, target_agents: set[str]) -> list[str]:
+        """Return the ordered workflow slice starting at the earliest target agent."""
+
+        ordered_targets = [agent for agent in self._workflow_order if agent in target_agents]
+        if not ordered_targets:
+            return []
+
+        first_target = ordered_targets[0]
+        start_index = self._workflow_order.index(first_target)
+        return self._workflow_order[start_index:].copy()
+
+    def _get_projected_total_steps(self) -> int:
+        """Estimate the total episode length from completed plus pending work."""
+
+        if self._done:
+            return max(self._state.step_count, WorkflowConfig.DEFAULT_TOTAL_STEPS)
+
+        return max(
+            self._state.step_count + len(self._pending_agents),
+            WorkflowConfig.DEFAULT_TOTAL_STEPS,
+        )
 
     def _reset_step_tracking(self) -> None:
         """Reset per-step workflow metrics used by rewards and observations."""
@@ -384,6 +532,14 @@ class SkyPlanEnvironment(Environment):
             timestamp=timestamp,
         )
 
+        if action.agent_id in ROLE_AUTHORING_AGENTS:
+            affected_doc_types = {doc_type, *COMPANION_DOCUMENTS.get(action.agent_id, ())}
+            self._invalidate_downstream_documents(
+                author_agent=action.agent_id,
+                timestamp=timestamp,
+                excluded_doc_types=affected_doc_types,
+            )
+
     def _set_document_status(
         self,
         doc_type: str,
@@ -450,6 +606,30 @@ class SkyPlanEnvironment(Environment):
                 companion_document.updated_at = timestamp
                 companion_document.status = DocumentStatus.DRAFT
 
+    def _invalidate_downstream_documents(
+        self,
+        author_agent: str,
+        timestamp: str,
+        excluded_doc_types: set[str],
+    ) -> None:
+        """Mark downstream artifacts as drafts after an upstream document changes."""
+
+        if author_agent not in self._workflow_order:
+            return
+
+        start_index = self._workflow_order.index(author_agent) + 1
+        for downstream_agent in self._workflow_order[start_index:]:
+            for downstream_doc_type in get_produced_documents(downstream_agent):
+                if downstream_doc_type in excluded_doc_types:
+                    continue
+
+                downstream_doc = self._documents.get(downstream_doc_type)
+                if downstream_doc is None:
+                    continue
+
+                downstream_doc.status = DocumentStatus.DRAFT
+                downstream_doc.updated_at = timestamp
+
     def _build_observation(
         self,
         result: str,
@@ -476,7 +656,7 @@ class SkyPlanEnvironment(Environment):
             reasoning=reasoning,
             current_agent=self._current_agent,
             step_number=self._step_number,
-            total_steps=self._total_steps,
+            total_steps=self._get_projected_total_steps(),
             documents=self._documents,
             feedback=self._feedback,
             last_action_result=self._last_action_result,
@@ -508,13 +688,15 @@ class SkyPlanEnvironment(Environment):
         return observation
 
     def _get_current_phase(self) -> str:
-        """Get the current planning phase based on step number."""
+        """Get the current planning phase from the agent currently holding the turn."""
 
-        phase_index = min(
-            (self._step_number - 1) // 2,
-            len(WorkflowConfig.PHASES) - 1,
-        )
-        return WorkflowConfig.PHASES[phase_index]
+        if self._current_agent in WorkflowConfig.AGENT_PHASES:
+            return WorkflowConfig.AGENT_PHASES[self._current_agent]
+
+        if self._last_action_result and self._last_action_result.agent_id in WorkflowConfig.AGENT_PHASES:
+            return WorkflowConfig.AGENT_PHASES[self._last_action_result.agent_id]
+
+        return WorkflowConfig.PHASES[0]
 
     def _generate_collaborative_feedback(self, action: SkyPlanAction) -> Feedback | None:
         """Generate collaborative feedback when a new document is weak."""
@@ -668,6 +850,9 @@ class SkyPlanEnvironment(Environment):
         required_approvals = (
             DocumentStatusConfig.get_required_approvals(self._task_id) or required_docs
         )
+        required_approvals = [
+            doc_type for doc_type in required_approvals if doc_type != DocumentType.STRATEGY
+        ]
         unapproved_docs = [
             doc_type
             for doc_type in required_approvals

@@ -41,11 +41,23 @@ class WorkflowConfig:
 
     Attributes:
         PHASES: List of workflow phases
-        DEFAULT_TOTAL_STEPS: Default total steps in a workflow
+        DEFAULT_TOTAL_STEPS: Default steps in a single pass through the workflow
+        MAX_REVISION_CYCLES: Maximum number of revision loops before termination
+        MAX_TOTAL_STEPS: Hard ceiling across the full episode
     """
 
     PHASES: list[str] = ["research", "product", "architecture", "planning", "validation", "strategy"]
-    DEFAULT_TOTAL_STEPS: int = 10
+    DEFAULT_TOTAL_STEPS: int = 6
+    MAX_REVISION_CYCLES: int = 2
+    MAX_TOTAL_STEPS: int = 18
+    AGENT_PHASES: dict[str, str] = {
+        "maya": "research",
+        "elon": "product",
+        "jordan": "architecture",
+        "robert": "planning",
+        "taylor": "validation",
+        "sam": "strategy",
+    }
 
 
 def utc_timestamp() -> str:
