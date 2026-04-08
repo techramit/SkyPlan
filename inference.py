@@ -31,11 +31,15 @@ class RuntimeConfig:
 
     api_base_url: str
     model_name: str
-    hf_token: str
+    api_key: str
     image_name: str
     task_selector: str
     temperature: float
     max_tokens: int
+
+
+class ModelRequestError(RuntimeError):
+    """Raised when the model request fails and the episode cannot continue."""
 
 
 def load_env_file(path: str | Path = ".env") -> None:
@@ -72,24 +76,54 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _is_huggingface_router(api_base_url: str) -> bool:
+    """Return True when the configured endpoint points at the Hugging Face router."""
+
+    return "huggingface.co" in api_base_url.lower()
+
+
+def _resolve_inference_credentials() -> tuple[str, str, bool]:
+    """Resolve the inference endpoint and API key with provider-aware fallbacks."""
+
+    inference_api_key = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+    legacy_api_key = os.getenv("SKYPLAN_LLM_API_KEY")
+
+    if inference_api_key:
+        api_base_url = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+        return api_base_url, inference_api_key, False
+
+    if legacy_api_key:
+        api_base_url = os.getenv(
+            "SKYPLAN_LLM_BASE_URL",
+            "https://integrate.api.nvidia.com/v1",
+        )
+        return api_base_url, legacy_api_key, True
+
+    raise ValueError(
+        "Inference credentials are required. Set HF_TOKEN or API_KEY for the Hugging Face "
+        "router, or set SKYPLAN_LLM_API_KEY for the SkyPlan-compatible inference endpoint."
+    )
+
+
 def get_runtime_config(task_override: str | None = None) -> RuntimeConfig:
     """Resolve runtime configuration after environment variables are loaded."""
 
-    hf_token = (
-        os.getenv("HF_TOKEN")
-        or os.getenv("API_KEY")
-        or os.getenv("SKYPLAN_LLM_API_KEY")
-    )
-    if not hf_token:
-        raise ValueError(
-            "HF_TOKEN or API_KEY environment variable is required. "
-            "Set it in your shell or local .env file."
+    api_base_url, api_key, uses_legacy_endpoint = _resolve_inference_credentials()
+
+    if uses_legacy_endpoint:
+        model_name = os.getenv("SKYPLAN_LLM_MODEL") or os.getenv("MODEL_NAME") or "meta/llama-3.1-405b-instruct"
+    else:
+        default_model_name = (
+            "Qwen/Qwen2.5-72B-Instruct"
+            if _is_huggingface_router(api_base_url)
+            else "meta/llama-3.1-405b-instruct"
         )
+        model_name = os.getenv("MODEL_NAME", default_model_name)
 
     return RuntimeConfig(
-        api_base_url=os.getenv("API_BASE_URL", "https://router.huggingface.co/v1"),
-        model_name=os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct"),
-        hf_token=hf_token,
+        api_base_url=api_base_url,
+        model_name=model_name,
+        api_key=api_key,
         image_name=os.getenv("IMAGE_NAME", "skyplan-env"),
         task_selector=(task_override or os.getenv("SKYPLAN_TASK", "all")).strip(),
         temperature=float(os.getenv("SKYPLAN_TEMPERATURE", "0.0")),
@@ -278,12 +312,7 @@ def get_model_message(
         response_text = completion.choices[0].message.content or ""
         return parse_agent_response(response_text, agent_id)
     except Exception as exc:
-        log_error(f"[model-error] {agent_id}: {exc}")
-        return {
-            "action_type": get_allowed_actions(agent_id)[0],
-            "reasoning": "Falling back to a safe default action because the model request failed.",
-            "content": f"# {get_agent_name(agent_id)} Output\nProvide the next planning artifact for: {task_description}",
-        }
+        raise ModelRequestError(f"{agent_id}: {exc}") from exc
 
 
 def format_action_string(action: dict[str, str]) -> str:
@@ -323,14 +352,29 @@ async def run_episode(
         if observation.done:
             break
 
-        action_data = get_model_message(
-            client=client,
-            step=step_number,
-            agent_id=agent_id,
-            observation=observation,
-            task_description=task_config.description,
-            runtime_config=runtime_config,
-        )
+        try:
+            action_data = get_model_message(
+                client=client,
+                step=step_number,
+                agent_id=agent_id,
+                observation=observation,
+                task_description=task_config.description,
+                runtime_config=runtime_config,
+            )
+        except ModelRequestError as exc:
+            encountered_error = True
+            steps_taken = step_number
+            rewards.append(0.0)
+            log_error(f"[model-error] {exc}")
+            log_step(
+                step=step_number,
+                action=f"{agent_id}:MODEL_REQUEST_FAILED",
+                reward=0.0,
+                done=False,
+                error=str(exc),
+            )
+            break
+
         action_data["agent_id"] = agent_id
 
         try:
@@ -414,7 +458,7 @@ async def main(argv: list[str] | None = None) -> None:
 
     client = OpenAI(
         base_url=runtime_config.api_base_url,
-        api_key=runtime_config.hf_token,
+        api_key=runtime_config.api_key,
     )
     for task_id in task_ids:
         task_config = TASKS[task_id]

@@ -1,6 +1,7 @@
 """Tests for the SkyPlan inference runner contract."""
 
 import asyncio
+from types import SimpleNamespace
 
 import inference
 from AgentEnv.models import Document, SkyPlanObservation
@@ -157,7 +158,7 @@ def test_load_env_file_populates_missing_variables(tmp_path, monkeypatch):
 
     inference.load_env_file(env_file)
 
-    assert inference.get_runtime_config().hf_token == "from-file"
+    assert inference.get_runtime_config().api_key == "from-file"
     assert inference.get_runtime_config().model_name == "file-model"
     assert inference.get_runtime_config().task_selector == "easy_user_authentication"
 
@@ -171,3 +172,70 @@ def test_parse_cli_task_override_wins_over_environment(monkeypatch):
     runtime_config = inference.get_runtime_config("all")
 
     assert inference.resolve_task_ids(runtime_config.task_selector) == list(inference.TASKS.keys())
+
+
+def test_runtime_config_uses_legacy_skyplan_endpoint_when_only_legacy_key_exists(monkeypatch):
+    """Legacy SkyPlan inference credentials should resolve to the compatible endpoint."""
+
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.setenv("SKYPLAN_LLM_API_KEY", "legacy-token")
+    monkeypatch.setenv("SKYPLAN_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    monkeypatch.setenv("SKYPLAN_LLM_MODEL", "meta/llama-3.1-405b-instruct")
+    monkeypatch.setenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+
+    runtime_config = inference.get_runtime_config()
+
+    assert runtime_config.api_base_url == "https://integrate.api.nvidia.com/v1"
+    assert runtime_config.api_key == "legacy-token"
+    assert runtime_config.model_name == "meta/llama-3.1-405b-instruct"
+
+
+def test_run_episode_fails_fast_when_model_request_fails(monkeypatch):
+    """Model request errors should stop the episode and avoid fake-success results."""
+
+    async def fake_reset(**kwargs):
+        del kwargs
+        return SimpleNamespace(observation=_make_observation())
+
+    class FakeEnv:
+        reset = staticmethod(fake_reset)
+
+    runtime_config = inference.RuntimeConfig(
+        api_base_url="https://router.huggingface.co/v1",
+        model_name="test-model",
+        api_key="test-token",
+        image_name="skyplan-env",
+        task_selector="easy_user_authentication",
+        temperature=0.0,
+        max_tokens=2000,
+    )
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        inference,
+        "get_model_message",
+        lambda **kwargs: (_ for _ in ()).throw(inference.ModelRequestError("maya: 401 invalid")),
+    )
+    monkeypatch.setattr(inference, "log_error", lambda message: events.append(f"error:{message}"))
+    monkeypatch.setattr(
+        inference,
+        "log_step",
+        lambda **kwargs: events.append(
+            f"step:{kwargs['action']}:{kwargs['reward']:.2f}:{kwargs['error']}"
+        ),
+    )
+
+    result = asyncio.run(
+        inference.run_episode(
+            client=object(),
+            env=FakeEnv(),
+            task_id="easy_user_authentication",
+            task_config=inference.TASKS["easy_user_authentication"],
+            runtime_config=runtime_config,
+        )
+    )
+
+    assert result == {"success": False, "steps": 1, "rewards": [0.0]}
+    assert any("[model-error] maya: 401 invalid" in event for event in events)
+    assert any("MODEL_REQUEST_FAILED" in event for event in events)
