@@ -14,12 +14,10 @@ from typing import Any
 
 from openai import OpenAI
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "AgentEnv"))
-
-import prompts as agent_prompts
-
+import AgentEnv.prompts as agent_prompts
 from AgentEnv import SkyPlanAction, SkyPlanObservation, TASKS, get_all_agent_ids, get_allowed_actions, get_agent_name
 from AgentEnv.client import AgentenvEnv
+from AgentEnv.workflow import get_required_documents
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
@@ -80,23 +78,34 @@ def build_user_prompt(
         f"Task: {task_description}",
     ]
 
-    if observation.documents:
+    selected_documents = _select_document_context(agent_id, observation)
+    if selected_documents:
         context_parts.append("\nExisting planning artifacts:")
-        for doc_type, document in observation.documents.items():
+        for doc_type, document in selected_documents:
             preview = document.content.strip()
-            if len(preview) > 500:
-                preview = preview[:500] + "\n... [truncated]"
+            if len(preview) > 240:
+                preview = preview[:240] + "\n... [truncated]"
             context_parts.append(f"\n- {doc_type} ({document.status}):\n{preview}")
+        omitted_documents = len(observation.documents) - len(selected_documents)
+        if omitted_documents > 0:
+            context_parts.append(f"\nAdditional artifacts omitted for brevity: {omitted_documents}")
 
-    unresolved_feedback = [item for item in observation.feedback if not item.resolved]
+    unresolved_feedback = [
+        item
+        for item in observation.feedback
+        if not item.resolved and item.to_agent in {"", agent_id}
+    ]
     if unresolved_feedback:
         context_parts.append("\nOutstanding feedback to consider:")
-        for feedback in unresolved_feedback[-5:]:
+        for feedback in unresolved_feedback[-3:]:
             target = feedback.to_agent or "team"
             context_parts.append(
                 f"\n- from={feedback.from_agent} to={target} doc={feedback.document_type or 'general'}: "
                 f"{feedback.comment}"
             )
+        omitted_feedback = len(unresolved_feedback) - 3
+        if omitted_feedback > 0:
+            context_parts.append(f"\nAdditional relevant feedback omitted for brevity: {omitted_feedback}")
 
     if observation.document_status_summary:
         context_parts.append(
@@ -127,6 +136,28 @@ def build_user_prompt(
         "Your content should advance the workflow and directly address any unresolved feedback relevant to your role."
     )
     return "\n".join(context_parts)
+
+
+def _select_document_context(
+    agent_id: str,
+    observation: SkyPlanObservation,
+) -> list[tuple[str, Any]]:
+    """Select the highest-signal document subset for the acting agent."""
+
+    selected_doc_types: list[str] = []
+    for doc_type in get_required_documents(agent_id):
+        if doc_type in observation.documents and doc_type not in selected_doc_types:
+            selected_doc_types.append(doc_type)
+
+    for doc_type in list(observation.documents.keys())[-2:]:
+        if doc_type not in selected_doc_types:
+            selected_doc_types.append(doc_type)
+
+    return [
+        (doc_type, observation.documents[doc_type])
+        for doc_type in selected_doc_types
+        if doc_type in observation.documents
+    ]
 
 
 def parse_agent_response(response: str, agent_id: str) -> dict[str, str]:
@@ -313,28 +344,28 @@ async def main() -> None:
         raise SystemExit(1) from exc
 
     client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+    for task_id in task_ids:
+        task_config = TASKS[task_id]
+        env: AgentenvEnv | None = None
+        result: dict[str, Any] = {"success": False, "steps": 0, "rewards": []}
 
-    try:
-        env = await AgentenvEnv.from_docker_image(IMAGE_NAME)
-    except Exception as exc:
-        log_error(f"Failed to connect to environment: {exc}")
-        raise SystemExit(1) from exc
-
-    try:
-        for task_id in task_ids:
-            task_config = TASKS[task_id]
-            log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
+        log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
+        try:
+            env = await AgentenvEnv.from_docker_image(IMAGE_NAME)
             result = await run_episode(client, env, task_id, task_config)
+        except Exception as exc:
+            log_error(f"Failed to execute task {task_id}: {exc}")
+        finally:
+            if env is not None:
+                try:
+                    await env.close()
+                except Exception as exc:
+                    log_error(f"env.close() error for task {task_id}: {exc}")
             log_end(
                 success=result["success"],
                 steps=result["steps"],
                 rewards=result["rewards"],
             )
-    finally:
-        try:
-            await env.close()
-        except Exception as exc:
-            log_error(f"env.close() error: {exc}")
 
 
 if __name__ == "__main__":
