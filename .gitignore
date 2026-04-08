@@ -13,7 +13,7 @@ PrivateReadme/
 __pycache__/
 
 # Virtual environments
-venv/
+.venv/
 
 # IDE
 .vscode/
