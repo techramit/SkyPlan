@@ -22,40 +22,42 @@ try:
         ACTION_TO_DOCUMENT,
         Document,
         DocumentType,
+        DocumentStatus,
+        DocumentStatusConfig,
         Feedback,
         LastAction,
-        RewardConfig,
         SkyPlanAction,
         SkyPlanObservation,
         ValidationConfig,
         WorkflowConfig,
-            DocumentStatus,
-            DocumentStatusConfig,
     )
-    from ..reward import RewardCalculator, StepReward
+    from ..reward import RewardCalculator, RewardConfig
     from ..workflow import (
         get_first_agent,
         get_handoff_message,
         get_next_agent,
+        get_required_documents,
     )
 except ImportError:
     from models import (
         ACTION_TO_DOCUMENT,
         Document,
         DocumentType,
+        DocumentStatus,
+        DocumentStatusConfig,
         Feedback,
         LastAction,
-        RewardConfig,
         SkyPlanAction,
         SkyPlanObservation,
         ValidationConfig,
         WorkflowConfig,
     )
-    from reward import RewardCalculator, StepReward
+    from reward import RewardCalculator, RewardConfig
     from workflow import (
         get_first_agent,
         get_handoff_message,
         get_next_agent,
+        get_required_documents,
     )
 
 
@@ -197,12 +199,20 @@ class SkyPlanEnvironment(Environment):
         self._generate_and_process_feedback(action)
 
         # 4. The Performance Review: Calculate reward using the new reward system
+        # Track feedback values for reward calculation
+        feedback_generated_this_step = self._feedback[-(self._last_action_result.feedback_generated_count or 0):] if self._last_action_result else []
+        feedback_resolved_this_step = [fb for fb in self._feedback if fb.resolved and fb.resolution_timestamp and fb.resolution_timestamp.startswith(datetime.utcnow().isoformat()[:10])]
+        new_approvals_this_step = [(doc_type, doc.author) for doc_type, doc in self._documents.items() if doc.status == "approved" and doc.updated_at and doc.updated_at.startswith(datetime.utcnow().isoformat()[:10])]
+
         step_reward = self._reward_calculator.calculate_step_reward(
             action=action,
             documents=self._documents,
             task_keywords=self._task_keywords,
             task_difficulty=self._task_difficulty,
             required_sections=self._required_sections,
+            feedback_generated=feedback_generated_this_step,
+            feedback_resolved=feedback_resolved_this_step,
+            new_approvals=new_approvals_this_step,
         )
         reward = step_reward.total
 

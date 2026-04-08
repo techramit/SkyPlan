@@ -1014,6 +1014,14 @@ class SkyPlanObservation(Observation):
         default_factory=dict,
         description="Current state of all planning documents",
     )
+    document_status_summary: dict[str, int] = Field(
+        default_factory=dict,
+        description="Summary of documents by status (draft, in_review, approved, rejected).",
+    )
+    documents_awaiting_review: list[str] = Field(
+        default_factory=list,
+        description="List of documents that are still waiting for review or approval.",
+    )
     errors: list[str] = Field(
         default_factory=list,
         description="List of any errors encountered during action execution",
