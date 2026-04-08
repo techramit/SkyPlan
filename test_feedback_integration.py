@@ -7,7 +7,15 @@ import pytest
 
 from AgentEnv.client import AgentenvEnv
 from AgentEnv.models import ActionType, Document, Feedback, LastAction, SkyPlanAction
-from AgentEnv.reward import RewardCalculator
+from AgentEnv.reward import (
+    QualityBonusCalculator,
+    QualityScore,
+    RewardCache,
+    RewardCalculator,
+    RewardConfig,
+    ScoreNormalizer,
+    clear_reward_cache,
+)
 from AgentEnv.tasks import TASKS
 
 
@@ -74,6 +82,23 @@ def _short_workflow_content(label: str, task_name: str) -> str:
     return f"# {label}\n{task_name} notes"
 
 
+def _rich_document_content(label: str) -> str:
+    """Generate structured content that should clear deterministic quality checks."""
+
+    return (
+        f"# {label}\n\n"
+        "## Overview\n"
+        f"The {label.lower()} artifact captures detailed requirements, risks, dependencies, "
+        "acceptance criteria, and execution guidance for the planning workflow.\n\n"
+        "## Details\n"
+        "- Requirement coverage\n"
+        "- Dependency mapping\n"
+        "- Risk mitigation\n\n"
+        "The document is intentionally long enough to satisfy validation expectations and "
+        "support downstream approvals with clear structure."
+    )
+
+
 def test_generate_collaborative_feedback_for_low_quality_action(make_env):
     """Low-quality action output should generate collaborative feedback."""
 
@@ -123,6 +148,36 @@ def test_generate_validation_feedback_updates_statuses_and_targets_authors(make_
         for doc_type in ("RESEARCH", "PRD", "TRD", "ARCHITECTURE", "ROADMAP", "TASKS")
     )
     assert env._documents["VALIDATION"].status == "in_review"
+
+
+def test_validation_approval_tracking_credits_the_reviewer(make_env):
+    """Approval tuples should attribute approvals to Taylor, not the original author."""
+
+    env = make_env()
+    env._documents = {
+        "RESEARCH": _make_document("RESEARCH", "maya", _rich_document_content("Research")),
+        "PRD": _make_document("PRD", "elon", _rich_document_content("PRD")),
+        "TRD": _make_document("TRD", "jordan", _rich_document_content("TRD")),
+        "ARCHITECTURE": _make_document("ARCHITECTURE", "jordan", _rich_document_content("Architecture")),
+        "ROADMAP": _make_document("ROADMAP", "robert", _rich_document_content("Roadmap")),
+        "TASKS": _make_document("TASKS", "robert", _rich_document_content("Tasks")),
+        "VALIDATION": _make_document("VALIDATION", "taylor", _rich_document_content("Validation")),
+    }
+    env._reset_step_tracking()
+
+    env._generate_validation_feedback("taylor")
+
+    assert env._new_approvals_this_step
+    assert {approver for _, approver in env._new_approvals_this_step} == {"taylor"}
+    assert {doc_type for doc_type, _ in env._new_approvals_this_step} == {
+        "RESEARCH",
+        "PRD",
+        "TRD",
+        "ARCHITECTURE",
+        "ROADMAP",
+        "TASKS",
+        "VALIDATION",
+    }
 
 
 def test_generate_strategic_feedback_flags_missing_docs_and_approval_gaps(
@@ -320,6 +375,83 @@ def test_reward_calculator_clamps_step_reward_but_keeps_raw_total():
     assert 0.0 <= step_reward.total <= 1.0
     assert step_reward.raw_total <= step_reward.total
     assert step_reward.raw_total < 0.0
+
+
+def test_reward_normalizer_accounts_for_feedback_and_approval_ceiling():
+    """Final-score normalization should leave headroom above the legacy ceiling."""
+
+    config = RewardConfig()
+    legacy_max = (
+        config.QUALITY_BONUS_MAX * config.WORKFLOW_STEPS
+        + config.TEAMWORK_BONUS_MAX * config.WORKFLOW_STEPS
+        + config.COMPLETION_BONUS
+    )
+    normalizer = ScoreNormalizer(config=config)
+
+    assert config.NORMALIZER_MAX_POSSIBLE > legacy_max
+    assert normalizer.normalize(legacy_max + 0.25) < 1.0
+
+
+def test_reward_cache_scopes_scores_by_task_context(monkeypatch):
+    """LLM-score caching should not bleed across different task contexts."""
+
+    clear_reward_cache()
+    calculator = QualityBonusCalculator(use_llm=True, api_key="test-key")
+    calculator._llm_client = object()  # Force the LLM path without a real client.
+    action = _make_action(
+        agent_id="elon",
+        action_type="WRITE_PRD",
+        content=_rich_document_content("PRD"),
+    )
+    calls: list[str] = []
+
+    def fake_llm_quality_score(action, documents, task_keywords, task_difficulty):
+        del action, documents, task_keywords
+        calls.append(task_difficulty)
+        overall = 0.25 if task_difficulty == "easy" else 0.85
+        return QualityScore(
+            overall=overall,
+            content_depth=overall,
+            structure=overall,
+            relevance=overall,
+            professionalism=overall,
+            feedback=[],
+            llm_used=True,
+        )
+
+    monkeypatch.setattr(calculator, "_llm_quality_score", fake_llm_quality_score)
+
+    easy_score = calculator.calculate(action, {}, ["auth"], "easy")
+    hard_score = calculator.calculate(action, {}, ["auth"], "hard")
+
+    assert easy_score.overall == 0.25
+    assert hard_score.overall == 0.85
+    assert calls == ["easy", "hard"]
+    clear_reward_cache()
+
+
+def test_reward_cache_evicts_oldest_entries_when_capacity_is_exceeded():
+    """The shared reward cache should stay bounded under many unique documents."""
+
+    cache = RewardCache(ttl_hours=24, max_entries=2)
+    score = QualityScore(
+        overall=0.5,
+        content_depth=0.5,
+        structure=0.5,
+        relevance=0.5,
+        professionalism=0.5,
+        feedback=[],
+        llm_used=False,
+    )
+
+    cache.set("doc-a", "scope-a", score)
+    cache.set("doc-b", "scope-b", score)
+    cache.set("doc-c", "scope-c", score)
+
+    assert cache.size() == 2
+    assert cache.get("doc-a", "scope-a") is None
+    assert cache.get("doc-b", "scope-b") is not None
+    assert cache.get("doc-c", "scope-c") is not None
 
 
 @pytest.mark.parametrize("task_id", sorted(TASKS))

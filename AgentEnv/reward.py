@@ -19,8 +19,9 @@ import hashlib
 import json
 import logging
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from os import environ
 from typing import Protocol, runtime_checkable
@@ -248,6 +249,7 @@ class RewardConfig:
 
     # Caching
     CACHE_TTL_HOURS: int = 24
+    CACHE_MAX_ENTRIES: int = 1024
 
     # Workflow configuration
     WORKFLOW_STEPS: int = DEFAULT_WORKFLOW_STEPS
@@ -275,15 +277,42 @@ class RewardConfig:
 
     def __post_init__(self):
         """Calculate derived values after initialization."""
+        validator_required_docs = len(get_required_documents("taylor"))
+        max_task_required_approvals = max(
+            (len(required_docs) for required_docs in DocumentStatusConfig.APPROVAL_REQUIREMENTS.values()),
+            default=0,
+        )
+        authoring_steps = max(self.WORKFLOW_STEPS - 2, 0)
+
         # Calculate normalizer bounds based on config and workflow steps
         # Worst case: all penalties, no bonuses
         self.NORMALIZER_MIN_POSSIBLE = (
             self.PENALTY_MAX_PER_STEP * self.WORKFLOW_STEPS
         )
-        # Best case: all bonuses, no penalties
+        # Best case: conservative workflow-aware ceiling for positive rewards.
         self.NORMALIZER_MAX_POSSIBLE = (
-            self.QUALITY_BONUS_MAX * self.WORKFLOW_STEPS
-            + self.TEAMWORK_BONUS_MAX * self.WORKFLOW_STEPS
+            authoring_steps
+            * (
+                self.QUALITY_BONUS_MAX
+                + self.TEAMWORK_BONUS_MAX
+                + self.COLLABORATIVE_FEEDBACK_BONUS
+            )
+            + (
+                self.QUALITY_BONUS_MAX
+                + self.TEAMWORK_BONUS_MAX
+                + validator_required_docs * self.VALIDATOR_FEEDBACK_BONUS
+                + (validator_required_docs + 1) * self.TAYLOR_APPROVAL_BONUS
+                + self.APPROVAL_BONUS_MAX
+            )
+            + (
+                self.QUALITY_BONUS_MAX
+                + self.TEAMWORK_BONUS_MAX
+                + 3 * self.STRATEGIC_FEEDBACK_BONUS
+                + (max_task_required_approvals + 2) * self.SAM_APPROVAL_BONUS
+                + self.FINAL_APPROVAL_BONUS
+                + self.APPROVAL_BONUS_MAX
+            )
+            + 2 * self.PRIMARY_FEEDBACK_RESOLUTION_BONUS
             + self.COMPLETION_BONUS
         )
 
@@ -504,48 +533,62 @@ class ContentAnalyzer:
 class RewardCache:
     """Cache for reward calculations to avoid redundant LLM calls."""
 
-    def __init__(self, ttl_hours: int = 24):
-        self._cache: dict[str, tuple[QualityScore, datetime]] = {}
+    def __init__(self, ttl_hours: int = 24, max_entries: int = 1024):
+        self._cache: OrderedDict[str, tuple[QualityScore, datetime]] = OrderedDict()
         self._ttl = timedelta(hours=ttl_hours)
+        self._max_entries = max_entries
 
-    def _hash_content(self, content: str) -> str:
-        """Create a hash of content for caching.
+    def _hash_scope(self, content: str, scope: str) -> str:
+        """Create a stable cache key from content plus evaluation scope.
 
         Args:
             content: Content to hash
+            scope: Context that materially affects the quality score
 
         Returns:
             SHA256 hash
         """
-        return hashlib.sha256(content.encode()).hexdigest()
+        payload = json.dumps(
+            {"content": content, "scope": scope},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
 
-    def get(self, content: str) -> QualityScore | None:
+    def get(self, content: str, scope: str) -> QualityScore | None:
         """Get cached score if available and not expired.
 
         Args:
             content: Document content to look up
+            scope: Evaluation context used to produce the score
 
         Returns:
             Cached QualityScore or None
         """
-        key = self._hash_content(content)
+        key = self._hash_scope(content, scope)
         if key in self._cache:
             score, timestamp = self._cache[key]
-            if datetime.utcnow() - timestamp < self._ttl:
+            if datetime.now(UTC) - timestamp < self._ttl:
+                self._cache.move_to_end(key)
                 return score
             # Expired, remove
             del self._cache[key]
         return None
 
-    def set(self, content: str, score: QualityScore) -> None:
+    def set(self, content: str, scope: str, score: QualityScore) -> None:
         """Cache a quality score.
 
         Args:
             content: Document content
+            scope: Evaluation context used to produce the score
             score: QualityScore to cache
         """
-        key = self._hash_content(content)
-        self._cache[key] = (score, datetime.utcnow())
+        key = self._hash_scope(content, scope)
+        self._cache[key] = (score, datetime.now(UTC))
+        self._cache.move_to_end(key)
+
+        while len(self._cache) > self._max_entries:
+            self._cache.popitem(last=False)
 
     def clear(self) -> None:
         """Clear all cached entries."""
@@ -561,7 +604,10 @@ class RewardCache:
 
 
 # Global cache instance
-_reward_cache = RewardCache(ttl_hours=reward_config.CACHE_TTL_HOURS)
+_reward_cache = RewardCache(
+    ttl_hours=reward_config.CACHE_TTL_HOURS,
+    max_entries=reward_config.CACHE_MAX_ENTRIES,
+)
 
 
 # ============================================================================
@@ -638,8 +684,14 @@ class QualityBonusCalculator(BaseCalculator):
         Returns:
             QualityScore with detailed breakdown
         """
+        cache_scope = self._build_cache_scope(
+            action=action,
+            task_keywords=task_keywords,
+            task_difficulty=task_difficulty,
+        )
+
         # Check cache first
-        cached_score = _reward_cache.get(action.content)
+        cached_score = _reward_cache.get(action.content, cache_scope)
         if cached_score is not None:
             return cached_score
 
@@ -650,7 +702,7 @@ class QualityBonusCalculator(BaseCalculator):
             )
             if llm_score is not None:
                 # Cache the result
-                _reward_cache.set(action.content, llm_score)
+                _reward_cache.set(action.content, cache_scope, llm_score)
                 return llm_score
 
         # Fall back to rule-based scoring
@@ -706,6 +758,27 @@ class QualityBonusCalculator(BaseCalculator):
             professionalism=professionalism,
             feedback=feedback,
             llm_used=False,
+        )
+
+    def _build_cache_scope(
+        self,
+        action: SkyPlanAction,
+        task_keywords: list[str] | None,
+        task_difficulty: str,
+    ) -> str:
+        """Create a cache scope that captures all scoring inputs besides content."""
+
+        return json.dumps(
+            {
+                "agent_id": action.agent_id,
+                "action_type": action.action_type,
+                "task_keywords": sorted(task_keywords or []),
+                "task_difficulty": task_difficulty,
+                "use_llm": self.use_llm,
+                "llm_model": self.config.LLM_MODEL,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
         )
 
     def _score_content_depth(self, content: str, difficulty: str) -> float:
@@ -1581,7 +1654,6 @@ class RewardCalculator:
         self.penalty_calculator = PenaltyCalculator(config=self.config)
         self.normalizer = ScoreNormalizer(config=self.config)
         self.approval_calculator = ApprovalBonusCalculator(config=self.config)
-        self._approved_documents = set()
 
         # Episode tracking
         self._step_rewards: list[StepReward] = []

@@ -358,7 +358,14 @@ class SkyPlanEnvironment(Environment):
             document.updated_at = timestamp
 
         if action_status:
-            self._set_document_status(doc_type, action_status, timestamp=timestamp)
+            self._set_document_status(
+                doc_type,
+                action_status,
+                timestamp=timestamp,
+                approved_by=action.agent_id
+                if action_status == DocumentStatus.APPROVED.value
+                else None,
+            )
         elif action.agent_id in ROLE_AUTHORING_AGENTS:
             self._set_document_status(doc_type, DocumentStatus.DRAFT, timestamp=timestamp)
         elif action.agent_id == "taylor" and doc_type == DocumentType.VALIDATION:
@@ -383,6 +390,7 @@ class SkyPlanEnvironment(Environment):
         status: DocumentStatus | str,
         *,
         timestamp: str | None = None,
+        approved_by: str | None = None,
     ) -> None:
         """Apply a document status transition and record new approvals."""
 
@@ -395,8 +403,12 @@ class SkyPlanEnvironment(Environment):
         document.status = status_value
         document.updated_at = timestamp or utc_timestamp()
 
-        if previous_status != DocumentStatus.APPROVED and status_value == DocumentStatus.APPROVED:
-            approval = (doc_type, document.author)
+        if (
+            previous_status != DocumentStatus.APPROVED
+            and status_value == DocumentStatus.APPROVED
+            and approved_by
+        ):
+            approval = (doc_type, approved_by)
             if approval not in self._new_approvals_this_step:
                 self._new_approvals_this_step.append(approval)
 
@@ -595,13 +607,21 @@ class SkyPlanEnvironment(Environment):
                     comment=f"{doc_type} meets the current validation bar and is approved for strategy review.",
                 )
             )
-            self._set_document_status(doc_type, DocumentStatus.APPROVED)
+            self._set_document_status(
+                doc_type,
+                DocumentStatus.APPROVED,
+                approved_by="taylor",
+            )
 
         if DocumentType.VALIDATION in self._documents:
             validation_status = (
                 DocumentStatus.IN_REVIEW if blocking_findings else DocumentStatus.APPROVED
             )
-            self._set_document_status(DocumentType.VALIDATION, validation_status)
+            self._set_document_status(
+                DocumentType.VALIDATION,
+                validation_status,
+                approved_by="taylor" if validation_status == DocumentStatus.APPROVED else None,
+            )
 
         return feedback_list
 
@@ -690,7 +710,11 @@ class SkyPlanEnvironment(Environment):
 
         for doc_type in set(required_docs + [DocumentType.VALIDATION, DocumentType.STRATEGY]):
             if doc_type in self._documents:
-                self._set_document_status(doc_type, DocumentStatus.APPROVED)
+                self._set_document_status(
+                    doc_type,
+                    DocumentStatus.APPROVED,
+                    approved_by="sam",
+                )
 
         return feedback_list
 
