@@ -4,8 +4,11 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Agentenv environment server components."""
+"""SkyPlan environment server components."""
 
-from .AgentEnv_environment import AgentenvEnvironment
+from .AgentEnv_environment import SkyPlanEnvironment
 
-__all__ = ["AgentenvEnvironment"]
+# Backwards-compatible alias for older imports.
+AgentenvEnvironment = SkyPlanEnvironment
+
+__all__ = ["SkyPlanEnvironment", "AgentenvEnvironment"]

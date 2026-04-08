@@ -90,6 +90,8 @@ class AgentenvEnv(
             feedback=obs_data.get("feedback", []),
             last_action_result=obs_data.get("last_action_result"),
             current_state=obs_data.get("current_state", {}),
+            document_status_summary=obs_data.get("document_status_summary", {}),
+            documents_awaiting_review=obs_data.get("documents_awaiting_review", []),
             errors=obs_data.get("errors", []),
             step_count=obs_data.get("step_count", 0),
             done=payload.get("done", False),

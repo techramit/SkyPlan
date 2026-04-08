@@ -450,6 +450,14 @@ class Feedback(BaseModel):
     )
     comment: str = Field(..., description="The actual feedback text or critique")
     timestamp: str = Field(default="", description="Timestamp when the feedback was given")
+    resolution_timestamp: str = Field(
+        default="",
+        description="Timestamp when the feedback was resolved"
+    )
+    addressed_by: str = Field(
+        default="",
+        description="Agent ID that addressed/responded to this feedback"
+    )
     resolved: bool = Field(
         default=False,
         description="Whether this feedback has been addressed/resolved",
@@ -485,6 +493,8 @@ class Feedback(BaseModel):
             comment=comment,
             timestamp=timestamp,
             resolved=False,
+            resolution_timestamp="",
+            addressed_by="",
         )
 
     def get_summary(self) -> str:
@@ -534,6 +544,18 @@ class LastAction(BaseModel):
         description="A descriptive message about the result (e.g., 'PRD created successfully' or 'Document rejected due to missing sections')",
     )
     timestamp: str = Field(default="", description="Timestamp when the action was completed")
+    resolved_feedback_count: int = Field(
+        default=0,
+        description="Number of feedback items resolved this action"
+    )
+    primary_feedback_addressed: bool = Field(
+        default=False,
+        description="Whether primary validator/CEO feedback was addressed"
+    )
+    feedback_generated_count: int = Field(
+        default=0,
+        description="Number of feedback items generated this step"
+    )
 
     @classmethod
     def create(
@@ -561,6 +583,9 @@ class LastAction(BaseModel):
             result=result,
             message=message,
             timestamp=timestamp,
+            resolved_feedback_count=0,
+            primary_feedback_addressed=False,
+            feedback_generated_count=0,
         )
 
     def is_successful(self) -> bool:
@@ -988,6 +1013,14 @@ class SkyPlanObservation(Observation):
     current_state: dict = Field(
         default_factory=dict,
         description="Current state of all planning documents",
+    )
+    document_status_summary: dict[str, int] = Field(
+        default_factory=dict,
+        description="Summary of documents by status (draft, in_review, approved, rejected).",
+    )
+    documents_awaiting_review: list[str] = Field(
+        default_factory=list,
+        description="List of documents that are still waiting for review or approval.",
     )
     errors: list[str] = Field(
         default_factory=list,

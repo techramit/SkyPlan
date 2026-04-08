@@ -1,52 +1,22 @@
-# Environment variables
+# Updated .gitignore File
+
+# Environment Variables
 .env
 .env.local
 .env.*.local
 
 # Private documentation
-Docs/PVT.md
-REFACTORING_SUMMARY.md
-INFERENCE_README.md
-AgentEnv\REWARD_README.md
+superpowers/
+PrivateReadme/
 
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
 # Virtual environments
 venv/
-ENV/
-env/
-.venv
 
 # IDE
 .vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
 
 # Logs
 logs/
@@ -56,16 +26,6 @@ logs/
 .cache/
 *.cache
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# MyPy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# Extra
+.agents/
+*.egg-info/
