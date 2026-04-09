@@ -195,17 +195,19 @@ def log_step(step: int, action: str, reward: float, done: bool, error: str | Non
 def log_end(success: bool, steps: int, rewards: list[float]) -> None:
     """Emit the episode end line in the exact required format."""
 
-    if rewards:
-        score = sum(rewards) / len(rewards)
-    else:
-        score = 0.0
+    def _open_unit(value: float) -> float:
+        if value <= 0.0:
+            return SCORE_EPSILON
+        if value >= 1.0:
+            return 1.0 - SCORE_EPSILON
+        return value
 
-    if score <= 0.0:
-        score = SCORE_EPSILON
-    elif score >= 1.0:
-        score = 1.0 - SCORE_EPSILON
+    rewards_for_log = [_open_unit(float(reward)) for reward in rewards]
+    if not rewards_for_log:
+        rewards_for_log = [SCORE_EPSILON]
 
-    rewards_str = ",".join(f"{reward:.2f}" for reward in rewards)
+    score = _open_unit(sum(rewards_for_log) / len(rewards_for_log))
+    rewards_str = ",".join(f"{reward:.6f}" for reward in rewards_for_log)
     print(
         f"[END] success={str(success).lower()} steps={steps} score={score:.6f} rewards={rewards_str}",
         flush=True,
