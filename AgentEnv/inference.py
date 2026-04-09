@@ -62,6 +62,7 @@ from AgentEnv.workflow import (
 )
 
 BENCHMARK = "skyplan"
+SCORE_EPSILON = 1e-6
 
 
 @dataclass(frozen=True)
@@ -194,9 +195,19 @@ def log_step(step: int, action: str, reward: float, done: bool, error: str | Non
 def log_end(success: bool, steps: int, rewards: list[float]) -> None:
     """Emit the episode end line in the exact required format."""
 
+    if rewards:
+        score = sum(rewards) / len(rewards)
+    else:
+        score = 0.0
+
+    if score <= 0.0:
+        score = SCORE_EPSILON
+    elif score >= 1.0:
+        score = 1.0 - SCORE_EPSILON
+
     rewards_str = ",".join(f"{reward:.2f}" for reward in rewards)
     print(
-        f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} score={score:.6f} rewards={rewards_str}",
         flush=True,
     )
 

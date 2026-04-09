@@ -625,6 +625,9 @@ _reward_cache = RewardCache(
 )
 
 
+SCORE_EPSILON = 1e-6
+
+
 # ============================================================================
 # Base Calculator
 # ============================================================================
@@ -1627,8 +1630,12 @@ class ScoreNormalizer:
         else:
             scaled = 0.5  # Default to middle if range is invalid
 
-        # Clamp to [0.0, 1.0]
-        return max(0.0, min(1.0, scaled))
+        # Clamp to strict open interval (0, 1).
+        if scaled <= 0.0:
+            return SCORE_EPSILON
+        if scaled >= 1.0:
+            return 1.0 - SCORE_EPSILON
+        return scaled
 
 
 # ============================================================================

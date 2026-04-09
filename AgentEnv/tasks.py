@@ -26,6 +26,21 @@ from .content_utils import (
 from .models import Document
 
 
+SCORE_EPSILON = 1e-6
+
+
+def _to_open_unit_interval(value: float) -> float:
+    """Clamp scores to the strict open interval (0, 1)."""
+
+    if value != value:  # NaN guard
+        return SCORE_EPSILON
+    if value <= 0.0:
+        return SCORE_EPSILON
+    if value >= 1.0:
+        return 1.0 - SCORE_EPSILON
+    return value
+
+
 # ============================================================================
 # Task Configuration
 # ============================================================================
@@ -594,8 +609,8 @@ def grade_task(
         # Weighted sum without composite scoring
         final_score = (completeness * 0.3) + (quality * 0.3) + (realism * 0.4)
 
-    # Clamp to [0.0, 1.0]
-    return max(0.0, min(1.0, final_score))
+    # Clamp to strict open interval (0, 1).
+    return _to_open_unit_interval(final_score)
 
 
 def _calculate_completeness(documents: dict[str, Document]) -> float:
@@ -865,7 +880,7 @@ def grade_agent_work(
         relevance = _calculate_relevance_score(agent_docs, task.required_keywords)
 
     # Average the scores
-    return (completeness + quality + relevance) / 3
+    return _to_open_unit_interval((completeness + quality + relevance) / 3)
 
 
 def get_agent_checklist(agent_id: str, task_id: str | None = None) -> list[str]:
