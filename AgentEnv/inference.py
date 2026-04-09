@@ -34,10 +34,30 @@ def _bootstrap_agentenv_import_path() -> None:
 
 _bootstrap_agentenv_import_path()
 
-import AgentEnv.prompts as agent_prompts
-from AgentEnv import SkyPlanAction, SkyPlanObservation, TASKS, get_all_agent_ids, get_allowed_actions, get_agent_name
-from AgentEnv.client import AgentenvEnv
-from AgentEnv.workflow import get_required_documents
+try:
+    import AgentEnv.prompts as agent_prompts
+    from AgentEnv import (
+        SkyPlanAction,
+        SkyPlanObservation,
+        TASKS,
+        get_all_agent_ids,
+        get_allowed_actions,
+        get_agent_name,
+    )
+    from AgentEnv.client import AgentenvEnv
+    from AgentEnv.workflow import get_required_documents
+except ModuleNotFoundError:
+    # Fallback for direct execution inside the AgentEnv directory.
+    import prompts as agent_prompts
+    from client import AgentenvEnv
+    from models import SkyPlanAction, SkyPlanObservation
+    from tasks import TASKS
+    from workflow import (
+        get_all_agent_ids,
+        get_allowed_actions,
+        get_agent_name,
+        get_required_documents,
+    )
 
 BENCHMARK = "skyplan"
 
