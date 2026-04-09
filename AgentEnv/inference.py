@@ -51,16 +51,15 @@ def _bootstrap_agentenv_import_path() -> None:
 _bootstrap_agentenv_import_path()
 
 import AgentEnv.prompts as agent_prompts
-from AgentEnv import (
-    SkyPlanAction,
-    SkyPlanObservation,
-    TASKS,
+from AgentEnv.client import AgentenvEnv
+from AgentEnv.models import SkyPlanAction, SkyPlanObservation
+from AgentEnv.tasks import TASKS
+from AgentEnv.workflow import (
     get_all_agent_ids,
     get_allowed_actions,
     get_agent_name,
+    get_required_documents,
 )
-from AgentEnv.client import AgentenvEnv
-from AgentEnv.workflow import get_required_documents
 
 BENCHMARK = "skyplan"
 
