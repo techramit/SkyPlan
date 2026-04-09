@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import sys
+import types
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,7 @@ from openai import OpenAI
 
 
 def _bootstrap_agentenv_import_path() -> None:
-    """Ensure the repository root containing AgentEnv is importable."""
+    """Ensure AgentEnv imports work in both packaged and flattened layouts."""
 
     current_file = Path(__file__).resolve()
     search_roots = [current_file.parent, *current_file.parents]
@@ -31,33 +32,35 @@ def _bootstrap_agentenv_import_path() -> None:
                 sys.path.insert(0, root_str)
             return
 
+    # Validator fallback: inference.py may be copied to a flat workspace without
+    # an AgentEnv/ directory, alongside client.py/models.py/etc.
+    flat_root = current_file.parent
+    required_files = {"client.py", "models.py", "tasks.py", "workflow.py", "prompts.py"}
+    if all((flat_root / filename).exists() for filename in required_files):
+        flat_root_str = str(flat_root)
+        if flat_root_str not in sys.path:
+            sys.path.insert(0, flat_root_str)
+
+        if "AgentEnv" not in sys.modules:
+            synthetic_pkg = types.ModuleType("AgentEnv")
+            synthetic_pkg.__path__ = [flat_root_str]
+            synthetic_pkg.__file__ = str(flat_root / "__init__.py")
+            sys.modules["AgentEnv"] = synthetic_pkg
+
 
 _bootstrap_agentenv_import_path()
 
-try:
-    import AgentEnv.prompts as agent_prompts
-    from AgentEnv import (
-        SkyPlanAction,
-        SkyPlanObservation,
-        TASKS,
-        get_all_agent_ids,
-        get_allowed_actions,
-        get_agent_name,
-    )
-    from AgentEnv.client import AgentenvEnv
-    from AgentEnv.workflow import get_required_documents
-except ModuleNotFoundError:
-    # Fallback for direct execution inside the AgentEnv directory.
-    import prompts as agent_prompts
-    from client import AgentenvEnv
-    from models import SkyPlanAction, SkyPlanObservation
-    from tasks import TASKS
-    from workflow import (
-        get_all_agent_ids,
-        get_allowed_actions,
-        get_agent_name,
-        get_required_documents,
-    )
+import AgentEnv.prompts as agent_prompts
+from AgentEnv import (
+    SkyPlanAction,
+    SkyPlanObservation,
+    TASKS,
+    get_all_agent_ids,
+    get_allowed_actions,
+    get_agent_name,
+)
+from AgentEnv.client import AgentenvEnv
+from AgentEnv.workflow import get_required_documents
 
 BENCHMARK = "skyplan"
 
