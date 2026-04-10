@@ -336,9 +336,8 @@ class RewardConfig:
             SKYPLAN_QUALITY_BONUS_MAX: Maximum quality bonus
             SKYPLAN_TEAMWORK_BONUS_MAX: Maximum teamwork bonus
             SKYPLAN_COMPLETION_BONUS: Completion bonus
-            SKYPLAN_LLM_API_KEY: LLM API key
-            SKYPLAN_LLM_BASE_URL: LLM base URL
-            SKYPLAN_LLM_MODEL: LLM model name
+            API_BASE_URL: LLM base URL override
+            MODEL_NAME: LLM model name override
             SKYPLAN_CACHE_TTL_HOURS: Cache TTL in hours
             SKYPLAN_WORKFLOW_STEPS: Number of workflow steps
         """
@@ -351,12 +350,10 @@ class RewardConfig:
             config.TEAMWORK_BONUS_MAX = float(environ["SKYPLAN_TEAMWORK_BONUS_MAX"])
         if "SKYPLAN_COMPLETION_BONUS" in environ:
             config.COMPLETION_BONUS = float(environ["SKYPLAN_COMPLETION_BONUS"])
-        if "SKYPLAN_LLM_API_KEY" in environ:
-            config.LLM_API_KEY = environ["SKYPLAN_LLM_API_KEY"]
-        if "SKYPLAN_LLM_BASE_URL" in environ:
-            config.LLM_BASE_URL = environ["SKYPLAN_LLM_BASE_URL"]
-        if "SKYPLAN_LLM_MODEL" in environ:
-            config.LLM_MODEL = environ["SKYPLAN_LLM_MODEL"]
+        if "API_BASE_URL" in environ:
+            config.LLM_BASE_URL = environ["API_BASE_URL"]
+        if "MODEL_NAME" in environ:
+            config.LLM_MODEL = environ["MODEL_NAME"]
         if "SKYPLAN_LLM_TIMEOUT" in environ:
             config.LLM_TIMEOUT = int(environ["SKYPLAN_LLM_TIMEOUT"])
         if "SKYPLAN_CACHE_TTL_HOURS" in environ:
@@ -1662,7 +1659,7 @@ class RewardCalculator:
         self.config = config or reward_config
         self.use_llm = use_llm
         # Use provided API key or get from environment
-        self.api_key = api_key or environ.get("SKYPLAN_LLM_API_KEY")
+        self.api_key = api_key or environ.get("HF_TOKEN") or environ.get("API_KEY")
 
         # Initialize component calculators
         self.quality_calculator = QualityBonusCalculator(

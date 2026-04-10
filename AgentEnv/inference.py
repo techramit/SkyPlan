@@ -124,43 +124,31 @@ def _is_huggingface_router(api_base_url: str) -> bool:
     return "huggingface.co" in api_base_url.lower()
 
 
-def _resolve_inference_credentials() -> tuple[str, str, bool]:
-    """Resolve the inference endpoint and API key with provider-aware fallbacks."""
+def _resolve_inference_credentials() -> tuple[str, str]:
+    """Resolve the inference endpoint and API key."""
 
     inference_api_key = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
-    legacy_api_key = os.getenv("SKYPLAN_LLM_API_KEY")
 
     if inference_api_key:
         api_base_url = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-        return api_base_url, inference_api_key, False
-
-    if legacy_api_key:
-        api_base_url = os.getenv(
-            "SKYPLAN_LLM_BASE_URL",
-            "https://integrate.api.nvidia.com/v1",
-        )
-        return api_base_url, legacy_api_key, True
+        return api_base_url, inference_api_key
 
     raise ValueError(
-        "Inference credentials are required. Set HF_TOKEN or API_KEY for the Hugging Face "
-        "router, or set SKYPLAN_LLM_API_KEY for the SkyPlan-compatible inference endpoint."
+        "Inference credentials are required. Set HF_TOKEN or API_KEY."
     )
 
 
 def get_runtime_config(task_override: str | None = None) -> RuntimeConfig:
     """Resolve runtime configuration after environment variables are loaded."""
 
-    api_base_url, api_key, uses_legacy_endpoint = _resolve_inference_credentials()
+    api_base_url, api_key = _resolve_inference_credentials()
 
-    if uses_legacy_endpoint:
-        model_name = os.getenv("SKYPLAN_LLM_MODEL") or os.getenv("MODEL_NAME") or "meta/llama-3.1-405b-instruct"
-    else:
-        default_model_name = (
-            "Qwen/Qwen2.5-72B-Instruct"
-            if _is_huggingface_router(api_base_url)
-            else "meta/llama-3.1-405b-instruct"
-        )
-        model_name = os.getenv("MODEL_NAME", default_model_name)
+    default_model_name = (
+        "Qwen/Qwen2.5-72B-Instruct"
+        if _is_huggingface_router(api_base_url)
+        else "meta/llama-3.1-405b-instruct"
+    )
+    model_name = os.getenv("MODEL_NAME", default_model_name)
 
     return RuntimeConfig(
         api_base_url=api_base_url,

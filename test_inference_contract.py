@@ -174,21 +174,17 @@ def test_parse_cli_task_override_wins_over_environment(monkeypatch):
     assert inference.resolve_task_ids(runtime_config.task_selector) == list(inference.TASKS.keys())
 
 
-def test_runtime_config_uses_legacy_skyplan_endpoint_when_only_legacy_key_exists(monkeypatch):
-    """Legacy SkyPlan inference credentials should resolve to the compatible endpoint."""
+def test_runtime_config_requires_hf_token_or_api_key(monkeypatch):
+    """Runtime config should fail when neither HF_TOKEN nor API_KEY is configured."""
 
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("API_KEY", raising=False)
-    monkeypatch.setenv("SKYPLAN_LLM_API_KEY", "legacy-token")
-    monkeypatch.setenv("SKYPLAN_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
-    monkeypatch.setenv("SKYPLAN_LLM_MODEL", "meta/llama-3.1-405b-instruct")
-    monkeypatch.setenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
-    runtime_config = inference.get_runtime_config()
-
-    assert runtime_config.api_base_url == "https://integrate.api.nvidia.com/v1"
-    assert runtime_config.api_key == "legacy-token"
-    assert runtime_config.model_name == "meta/llama-3.1-405b-instruct"
+    try:
+        inference.get_runtime_config()
+        assert False, "Expected ValueError for missing HF_TOKEN/API_KEY"
+    except ValueError as exc:
+        assert "HF_TOKEN or API_KEY" in str(exc)
 
 
 def test_run_episode_fails_fast_when_model_request_fails(monkeypatch):

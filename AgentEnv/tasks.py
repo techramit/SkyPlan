@@ -12,6 +12,7 @@ that scores performance (0.0–1.0).
 """
 
 import json
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal
@@ -576,6 +577,7 @@ def grade_task(
         raise ValueError(f"Unknown task_id: {task_id}")
 
     task = TASKS[task_id]
+    resolved_api_key = api_key or os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
     # Use base grader for common checks
     grader = BaseGrader()
@@ -584,8 +586,8 @@ def grade_task(
     completeness = grader.check_completeness(documents, REQUIRED_DOCUMENTS)
 
     # Use LLM for quality assessment if API key is provided and use_llm is True
-    if use_llm and api_key:
-        llm_scores = _llm_grade_content(task_id, documents, api_key)
+    if use_llm and resolved_api_key:
+        llm_scores = _llm_grade_content(task_id, documents, resolved_api_key)
         quality = llm_scores["content_quality"]
         realism = llm_scores["realism"]
     else:
@@ -699,8 +701,8 @@ def _llm_grade_content(
     task_id: str,
     documents: dict[str, Document],
     api_key: str,
-    base_url: str = "https://integrate.api.nvidia.com/v1",
-    model: str = "meta/llama-3.1-405b-instruct",
+    base_url: str | None = None,
+    model: str | None = None,
 ) -> dict[str, float]:
     """
     Use LLM to grade content quality and realism.
@@ -724,11 +726,14 @@ def _llm_grade_content(
     prompt = _build_grading_prompt(task, docs_summary)
 
     # Call the LLM
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    resolved_base_url = base_url or os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+    resolved_model = model or os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+
+    client = OpenAI(api_key=api_key, base_url=resolved_base_url)
 
     try:
         response = client.chat.completions.create(
-            model=model,
+            model=resolved_model,
             messages=[
                 {
                     "role": "system",
@@ -869,9 +874,11 @@ def grade_agent_work(
     # Check if all required documents are present
     completeness = len(agent_docs) / len(required_docs)
 
+    resolved_api_key = api_key or os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+
     # Use LLM for quality assessment if API key is provided and use_llm is True
-    if use_llm and api_key:
-        llm_scores = _llm_grade_content(task.task_id, agent_docs, api_key)
+    if use_llm and resolved_api_key:
+        llm_scores = _llm_grade_content(task.task_id, agent_docs, resolved_api_key)
         quality = llm_scores["content_quality"]
         relevance = llm_scores["realism"]
     else:
