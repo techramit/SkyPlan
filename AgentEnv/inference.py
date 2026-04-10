@@ -62,7 +62,7 @@ from AgentEnv.workflow import (
 )
 
 BENCHMARK = "skyplan"
-SCORE_EPSILON = 1e-6
+SCORE_EPSILON = 0.01
 
 
 @dataclass(frozen=True)
@@ -196,6 +196,8 @@ def log_end(success: bool, steps: int, rewards: list[float]) -> None:
     """Emit the episode end line in the exact required format."""
 
     def _open_unit(value: float) -> float:
+        if value != value:  # NaN guard
+            return SCORE_EPSILON
         if value <= 0.0:
             return SCORE_EPSILON
         if value >= 1.0:

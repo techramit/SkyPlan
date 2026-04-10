@@ -26,7 +26,7 @@ from .content_utils import (
 from .models import Document
 
 
-SCORE_EPSILON = 1e-6
+SCORE_EPSILON = 0.01
 
 
 def _to_open_unit_interval(value: float) -> float:

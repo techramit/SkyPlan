@@ -2,7 +2,13 @@
 
 from AgentEnv.content_utils import count_markdown_headers, has_markdown_headers, has_markdown_lists
 from AgentEnv.models import Document
-from AgentEnv.tasks import BaseGrader, _check_tasks_vs_roadmap_consistency
+from AgentEnv.tasks import (
+    BaseGrader,
+    REQUIRED_DOCUMENTS,
+    TASKS,
+    grade_task,
+    _check_tasks_vs_roadmap_consistency,
+)
 
 
 def test_shared_markdown_structure_helpers_require_real_markdown_syntax():
@@ -52,3 +58,37 @@ def test_tasks_vs_roadmap_consistency_needs_more_than_generic_term_overlap():
     score = _check_tasks_vs_roadmap_consistency(documents)
 
     assert 0.0 < score < 1.0
+
+
+def test_grade_task_is_always_strict_open_interval():
+    """Task-level grader outputs should always be strictly within (0, 1)."""
+
+    empty_docs: dict[str, Document] = {}
+    empty_score = grade_task(
+        "easy_user_authentication",
+        empty_docs,
+        use_llm=False,
+    )
+    assert 0.0 < empty_score < 1.0
+
+    strong_docs = {
+        doc_type: Document.create(
+            doc_type,
+            (
+                "# Overview\n\n"
+                "## Features\n"
+                "authentication login password user chat real-time websocket message "
+                "online notification saas multi-tenant data-isolation subscription "
+                "billing analytics white-label scalability implementation architecture "
+                "security scaling\n\n"
+                "## Implementation\n"
+                + ("detailed plan\n" * 200)
+            ),
+            "sam",
+        )
+        for doc_type in REQUIRED_DOCUMENTS
+    }
+
+    for task_id in TASKS:
+        score = grade_task(task_id, strong_docs, use_llm=False)
+        assert 0.0 < score < 1.0
