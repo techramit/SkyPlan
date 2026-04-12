@@ -1,96 +1,180 @@
-# SkyPlan
+<h1 align="center">SkyPlan</h1>
 
-SkyPlan is a multi-agent OpenEnv environment for autonomous product planning. Six specialized agents collaborate to turn a product idea into a research summary, PRD, technical design, roadmap, task breakdown, validation report, and final strategy approval.
+<p align="center">
+	<img src="https://capsule-render.vercel.app/api?type=rect&color=0:0EA5E9,100:0467DF&height=140&section=header&text=SkyPlan&fontSize=54&fontColor=ffffff&fontAlignY=42&desc=Multi-Agent%20Autonomous%20Planning%20Benchmark&descAlignY=72&descSize=16" alt="SkyPlan banner" />
+</p>
 
-## Why this environment
+<p align="center">
+	<a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+" /></a>
+	<a href="https://github.com/meta-pytorch/OpenEnv"><img src="https://img.shields.io/badge/OpenEnv-Compatible-0EA5E9" alt="OpenEnv Compatible" /></a>
+	<a href="https://huggingface.co/spaces"><img src="https://img.shields.io/badge/Hugging%20Face-Spaces-FFD21E?logo=huggingface&logoColor=black" alt="Hugging Face Spaces" /></a>
+	<a href="AboutHackathon/TASK.md"><img src="https://img.shields.io/badge/Meta-Hackathon%202k26-0467DF" alt="Meta Hackathon 2k26" /></a>
+	<a href="LICENSE"><img src="https://img.shields.io/badge/License-BSD--Style-4CAF50" alt="BSD Style License" /></a>
+</p>
 
-Product planning is a real workflow teams perform before implementation. SkyPlan models that work directly: market research, requirement definition, architecture design, execution planning, validation, and executive approval. The environment rewards useful partial progress, tracks document quality, and now includes explicit feedback and document-status transitions across the workflow.
+<p align="center">
+	<strong>Plan like a product org. Execute like an agent swarm.</strong><br/>
+	<sub>SkyPlan is built on OpenEnv and designed for real planning workflows: research, product definition, architecture, execution, validation, and strategy.</sub>
+</p>
 
-## Action and observation space
+---
 
-Actions are represented by `SkyPlanAction` in [models.py](AgentEnv/models.py). Each action includes:
-- `agent_id`: one of `maya`, `elon`, `jordan`, `robert`, `taylor`, `sam`
-- `action_type`: a role-valid action such as `SEARCH_MARKET`, `WRITE_PRD`, or `APPROVE_STRATEGY`
-- `reasoning`: the agent's rationale
-- `content`: the document content or review output
+## Quick Links
 
-Observations are represented by `SkyPlanObservation` in [models.py](AgentEnv/models.py). Agents receive:
-- task description and current phase
-- shared planning documents with statuses
-- feedback history and unresolved feedback
-- last action result
-- document status summary and documents awaiting review
-- reward and done signals
+<p align="center">
+	<a href="#what-skyplan-produces"><strong>Artifacts</strong></a> •
+	<a href="#workflow"><strong>Workflow</strong></a> •
+	<a href="#implementation-status"><strong>Status</strong></a> •
+	<a href="#tasks-and-grading"><strong>Grading</strong></a> •
+	<a href="#repository-structure"><strong>Structure</strong></a> •
+	<a href="#local-setup"><strong>Setup</strong></a> •
+	<a href="#run-inference"><strong>Inference</strong></a> •
+	<a href="#testing"><strong>Testing</strong></a> •
+	<a href="#deployment"><strong>Deploy</strong></a>
+</p>
+
+## What SkyPlan Produces
+
+For each episode, agents collaboratively build and iterate on:
+
+- Research summary
+- Product Requirements Document (PRD)
+- Technical Requirements Document (TRD)
+- System architecture
+- Roadmap and milestone plan
+- Task and sprint breakdown
+- Validation report
+- Strategic approval decision
 
 ## Workflow
 
-The workflow order is defined in [workflow.py](AgentEnv/workflow.py):
-1. Maya researches the market and problem space.
-2. Elon writes the PRD.
-3. Jordan produces the TRD and architecture.
-4. Robert creates the roadmap and task plan.
-5. Taylor validates the package and issues structured feedback.
-6. Sam provides strategic approval or requests revision.
+SkyPlan uses a role-based handoff pipeline:
 
-Documents move through `draft -> in_review -> approved/rejected`, and feedback can be generated, targeted, and later resolved by downstream actions.
+1. Maya (Research Analyst)
+2. Elon (Product Manager)
+3. Jordan (Architect)
+4. Robert (Execution Planner)
+5. Taylor (Validator)
+6. Sam (CEO)
 
-## Tasks
+The environment supports revision loops when quality gates are not met. Validation and strategy steps can route work back to targeted agents before episode completion.
 
-The benchmark ships with three graded tasks in [tasks.py](AgentEnv/tasks.py):
-- `easy_user_authentication`: simple authentication planning
-- `medium_chat_app`: real-time chat application planning
-- `hard_saas_platform`: multi-tenant SaaS platform planning
+## Implementation Status
 
-Each task includes deterministic grading inputs such as required keywords, required sections, and difficulty-specific expectations.
+Current codebase capabilities:
 
-## Setup
+- Typed models for actions, observations, documents, and feedback in [AgentEnv/models.py](AgentEnv/models.py)
+- Dynamic workflow orchestration and handoff rules in [AgentEnv/workflow.py](AgentEnv/workflow.py)
+- Document lifecycle transitions: `draft -> in_review -> approved/rejected`
+- Cross-agent feedback generation and resolution tracking
+- Reward shaping for step quality and episode-level completion in [AgentEnv/reward.py](AgentEnv/reward.py)
+- FastAPI/OpenEnv server implementation in [AgentEnv/server/AgentEnv_environment.py](AgentEnv/server/AgentEnv_environment.py)
+- Judge-compatible inference runner and protocol logging in [AgentEnv/inference.py](AgentEnv/inference.py)
+
+## Tasks and Grading
+
+SkyPlan ships with three graded tasks in [AgentEnv/tasks.py](AgentEnv/tasks.py):
+
+- `easy_user_authentication`
+- `medium_chat_app`
+- `hard_saas_platform`
+
+Grading combines:
+
+- Artifact completeness
+- Document structure quality
+- Keyword and requirement relevance
+- Agent-specific quality criteria
+- Cross-document consistency checks
+
+## Repository Structure
+
+```text
+SkyPlan/
+├── AgentEnv/
+│   ├── client.py
+│   ├── inference.py
+│   ├── models.py
+│   ├── prompts.py
+│   ├── reward.py
+│   ├── tasks.py
+│   ├── workflow.py
+│   └── server/
+│       ├── AgentEnv_environment.py
+│       └── app.py
+├── inference.py
+├── test_feedback_integration.py
+├── test_grading_quality.py
+└── test_inference_contract.py
+```
+
+## Local Setup
 
 ```bash
 cd AgentEnv
 uv sync --extra dev
 ```
 
-Run the server locally:
+Start the environment server:
 
 ```bash
-uv run --project AgentEnv server --port 8000
+uv run --project AgentEnv server --host 0.0.0.0 --port 8000
 ```
 
-Validate the OpenEnv package:
+Validate OpenEnv packaging and spec:
 
 ```bash
 cd AgentEnv
 openenv validate
 ```
 
-Run the baseline inference script from the repo root:
+## Run Inference
+
+From repository root:
 
 ```bash
-set HF_TOKEN=...
+export HF_TOKEN=your_token_here
 python inference.py
 ```
 
-By default, `inference.py` runs all three tasks and emits the required `[START]`, `[STEP]`, and `[END]` lines for each episode. Set `SKYPLAN_TASK` to a specific task id to run a single task.
+Useful runtime environment variables:
+
+- `HF_TOKEN` or `API_KEY` (required)
+- `API_BASE_URL` (default: `https://router.huggingface.co/v1`)
+- `MODEL_NAME`
+- `SKYPLAN_TASK` (`all` by default)
+
+Protocol output format used by the hackathon evaluator:
+
+```text
+[START] task=<task_name> env=<benchmark> model=<model_name>
+[STEP] step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+[END] success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
+```
 
 ## Testing
 
-Feedback integration, grading checks, and inference-contract coverage live in:
+Run the full test suite:
+
+```bash
+uv run --project AgentEnv pytest -q
+```
+
+Targeted suites:
+
 - [test_feedback_integration.py](test_feedback_integration.py)
 - [test_grading_quality.py](test_grading_quality.py)
 - [test_inference_contract.py](test_inference_contract.py)
 
+## Deployment
+
+Deploy to Hugging Face Spaces through OpenEnv:
+
 ```bash
-uv run --project AgentEnv pytest test_feedback_integration.py test_grading_quality.py test_inference_contract.py -q
+cd AgentEnv
+openenv push
 ```
 
-## Baseline scores
+## License
 
-Current deterministic local smoke-policy scores (`use_llm_reward=False`, one task-aligned workflow pass):
-
-| Task | Final Score |
-| --- | --- |
-| `easy_user_authentication` | `0.7214` |
-| `medium_chat_app` | `0.7214` |
-| `hard_saas_platform` | `0.6878` |
-
-The token-backed inference baseline is reproducible through [inference.py](inference.py). Re-run it with `HF_TOKEN` to record model-specific baseline scores for your chosen `MODEL_NAME`.
+This project is released under the BSD-style license in [LICENSE](LICENSE).
